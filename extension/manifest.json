@@ -1,0 +1,25 @@
+{
+  "manifest_version": 3,
+  "name": "Maite Corpus - TikTok Audio Extractor",
+  "version": "1.0",
+  "description": "Envía el audio de TikTok al servidor del corpus lingüístico",
+  "permissions": ["activeTab", "scripting"],
+  "host_permissions": ["https://www.tiktok.com/*", "http://localhost:8000/*"],
+  "action": {
+    "default_title": "Usá el botón verde dentro de TikTok para enviar videos",
+    "default_icon": {
+      "16": "icon.png",
+      "48": "icon.png",
+      "128": "icon.png"
+    }
+  },
+  "background": {
+    "service_worker": "background.js"
+  },
+  "content_scripts": [
+    {
+      "matches": ["https://www.tiktok.com/*"],
+      "js": ["content.js"]
+    }
+  ]
+}
