@@ -1,22 +1,31 @@
+import asyncio
 import logging
 from contextlib import asynccontextmanager
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
-
 from sqlalchemy import update
 
 from app.config import settings
 from app.database import async_session, init_db
 from app.models import Video
 from app.routes.videos import router as videos_router
+from app.worker import avanzar_ventana_transcripcion
 
 logging.basicConfig(
-    level=logging.DEBUG,
+    level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
 )
 
 logger = logging.getLogger("maite")
+
+_background_tasks: set[asyncio.Task] = set()
+
+
+def _background(task: asyncio.Task) -> None:
+    _background_tasks.add(task)
+    task.add_done_callback(_background_tasks.discard)
 
 
 @asynccontextmanager
@@ -36,6 +45,9 @@ async def lifespan(app: FastAPI):
             logger.info("Videos reseteados a pendiente: %d", result.rowcount)
         await session.commit()
 
+    logger.info("Arrancando ventana de transcripcion...")
+    _background(asyncio.create_task(avanzar_ventana_transcripcion()))
+
     logger.info("=== MAITE CORPUS API INICIADA ===")
     yield
     logger.info("=== MAITE CORPUS API DETENIDA ===")
@@ -43,6 +55,7 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="Maite Corpus API", version="0.1.0", lifespan=lifespan)
 
+# CORS abierto para desarrollo local
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],

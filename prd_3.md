@@ -30,7 +30,7 @@ El sistema es una plataforma de **muestreo aleatorio controlado** para construir
 
 ## 3. Marco Legal y Ético
 
-> **Esta herramienta es para uso en investigación académica.** El siguiente marco debe documentarse en la tesis/proyecto de Maite.
+> **Esta herramienta es para uso en investigación académica.** El siguiente marco debe documentarse en la tesis/proyecto
 
 ### 3.1. Uso de yt-dlp con TikTok
 - `yt-dlp` extrae únicamente el **audio** (`.mp3`) de videos públicos. No descarga ni almacena el video completo.

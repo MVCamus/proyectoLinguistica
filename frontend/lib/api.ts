@@ -67,6 +67,7 @@ export async function fetchVideos(
   return {
     videos: data.videos.map(apiVideoToFrontend),
     total: data.total,
+    rawVideos: data.videos,
   }
 }
 
@@ -122,6 +123,14 @@ export async function cancelarCola(videoId: string) {
   return res.json()
 }
 
+export async function reintentarVideo(videoId: string) {
+  const res = await fetch(`${API_BASE}/api/videos/${videoId}/reintentar`, {
+    method: 'POST',
+  })
+  if (!res.ok) throw new Error(`Error ${res.status} al reintentar`)
+  return res.json()
+}
+
 export async function fetchOembed(url: string) {
   try {
     const res = await fetch(`${API_BASE}/api/oembed?url=${encodeURIComponent(url)}`, {
@@ -145,12 +154,12 @@ export function getVideoFileUrl(videoId: string) {
 export interface ProcessingItem {
   id: string
   url: string
-  status: string  // 'pendiente' | 'transcribiendo' | 'listo_para_triage'
+  status: string  // 'pendiente' | 'descargando' | 'transcribiendo' | 'error'
 }
 
 export async function fetchProcessingQueue() {
   const res = await fetch(
-    `${API_BASE}/api/videos?status=pendiente,descargando,transcribiendo&limit=50&offset=0`
+    `${API_BASE}/api/videos?status=pendiente,descargando,transcribiendo,error&limit=50&offset=0`
   )
   if (!res.ok) throw new Error(`Error ${res.status} al obtener cola`)
   const data: ApiVideoList = await res.json()

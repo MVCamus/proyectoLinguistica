@@ -1,13 +1,17 @@
 from datetime import datetime
-from typing import Any
 
 from pydantic import BaseModel
+
+
+class TranscriptSegment(BaseModel):
+    start: float
+    end: float
+    text: str
 
 
 class IngestaRequest(BaseModel):
     hashtags_incluir: list[str] = []
     hashtags_excluir: list[str] = []
-    url_original: str | None = None
     urls_manuales: list[str] | None = None
 
 
@@ -21,11 +25,11 @@ class VideoOut(BaseModel):
     url: str
     username: str | None
     description: str | None
-    hashtags: list[Any] | None
+    hashtags: list[str] | None
     duration_sec: int | None
     status: str
-    transcript_original: list[Any] | None
-    transcript_editada: list[Any] | None
+    transcript_original: list[TranscriptSegment] | None
+    transcript_editada: list[TranscriptSegment] | None
     drive_url: str | None
     corpus_number: int | None
     shuffle_order: int | None
@@ -41,7 +45,7 @@ class VideoListResponse(BaseModel):
 
 
 class AprobarRequest(BaseModel):
-    transcript_editada: list[Any]
+    transcript_editada: list[TranscriptSegment]
 
 
 class MensajeResponse(BaseModel):

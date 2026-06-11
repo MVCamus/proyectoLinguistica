@@ -1,12 +1,16 @@
 import asyncio
+import hashlib
 import logging
+import re
+import shutil
+import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 
 import httpx
 from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
 from fastapi.responses import FileResponse, JSONResponse
-from sqlalchemy import select, func
+from sqlalchemy import select, func, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import async_session
@@ -21,12 +25,20 @@ from app.schemas import (
 )
 from app.worker import avanzar_ventana_transcripcion, subir_a_drive
 from app.services.discovery import parse_tiktok_urls
-from app.services.drive import eliminar_carpeta_video, renombrar_carpeta
+from app.services.drive import eliminar_carpeta_video, obtener_carpeta_grupo, renombrar_carpeta
 from app.config import settings as s
 
 logger = logging.getLogger("maite.api")
 
 router = APIRouter()
+
+_corpus_lock = asyncio.Lock()
+_background_tasks: set[asyncio.Task] = set()
+
+
+def _background(task: asyncio.Task) -> None:
+    _background_tasks.add(task)
+    task.add_done_callback(_background_tasks.discard)
 
 
 async def get_db() -> AsyncSession:
@@ -56,7 +68,7 @@ async def ingestar_pool(
     logger.info("URLs manuales recibidas: %s", body.urls_manuales)
     logger.info("Hashtags: %s", body.hashtags_incluir)
 
-    hashtags = body.hashtags_incluir or ["noticias", "aprendeentiktok", "español"]
+    hashtags = body.hashtags_incluir or s.default_hashtags
 
     result = await db.execute(
         select(func.max(Video.shuffle_order))
@@ -73,8 +85,6 @@ async def ingestar_pool(
     if not urls:
         raise HTTPException(status_code=400, detail="No se proporcionaron URLs de TikTok válidas")
 
-    import hashlib, re
-    from sqlalchemy import exists as sa_exists
     videos = []
     seen_ids = set()
     for i, url in enumerate(urls):
@@ -113,25 +123,29 @@ async def ingestar_pool(
         logger.warning("Algunos videos ya existian, insertando uno por uno...")
         insertados = 0
         for v in videos:
-            try:
-                db.add(v)
-                await db.commit()
-                insertados += 1
-            except Exception:
-                await db.rollback()
-                logger.debug("Video %s ya existia, saltando", v.id)
+            async with async_session() as single_session:
+                try:
+                    single_session.add(v)
+                    await single_session.commit()
+                    insertados += 1
+                except Exception:
+                    await single_session.rollback()
+                    logger.debug("Video %s ya existia, saltando", v.id)
         videos = videos[:insertados]
     logger.info("Guardados %d videos en DB", len(videos))
     for v in videos:
         logger.debug("  -> %s | %s", v.id, v.url)
 
-    asyncio.create_task(avanzar_ventana_transcripcion())
+    _background(asyncio.create_task(avanzar_ventana_transcripcion()))
     logger.info("Tarea avanzar_ventana_transcripcion encolada")
 
     return IngestaResponse(
         total_candidatos=len(videos),
         mensaje=f"Ingesta completada: {len(videos)} candidatos agregados al pool",
     )
+
+
+MAX_UPLOAD_SIZE = 500 * 1024 * 1024  # 500 MB
 
 
 @router.post("/upload-video")
@@ -142,12 +156,18 @@ async def subir_video(
     tmp_dir = Path(s.tmp_audio_dir)
     tmp_dir.mkdir(parents=True, exist_ok=True)
 
-    import hashlib, uuid
     vid_id = hashlib.md5(str(uuid.uuid4()).encode()).hexdigest()[:16]
     video_path = tmp_dir / f"{vid_id}.mp4"
 
-    content = await video.read()
-    video_path.write_bytes(content)
+    total = 0
+    with open(video_path, "wb") as buf:
+        while chunk := await video.read(64 * 1024):
+            total += len(chunk)
+            if total > MAX_UPLOAD_SIZE:
+                buf.close()
+                video_path.unlink(missing_ok=True)
+                raise HTTPException(status_code=413, detail="El archivo excede el tamaño máximo permitido (500 MB)")
+            buf.write(chunk)
 
     new_video = Video(
         id=vid_id,
@@ -161,9 +181,14 @@ async def subir_video(
         created_at=datetime.now(timezone.utc),
     )
     db.add(new_video)
-    await db.commit()
+    try:
+        await db.commit()
+    except Exception:
+        await db.rollback()
+        video_path.unlink(missing_ok=True)
+        raise
 
-    asyncio.create_task(avanzar_ventana_transcripcion())
+    _background(asyncio.create_task(avanzar_ventana_transcripcion()))
 
     return JSONResponse({
         "status": "ok",
@@ -238,45 +263,50 @@ async def aprobar_video(
     logger.info("=== APROBANDO VIDEO %s ===", video_id)
     logger.info("Segmentos editados: %d", len(body.transcript_editada or []))
 
-    # Asignar numero de corpus secuencial
-    max_num = await db.scalar(select(func.max(Video.corpus_number)))
-    corpus_number = (max_num or 0) + 1
-    video.corpus_number = corpus_number
-    video.status = "aprobado"
-    video.transcript_editada = body.transcript_editada
-    video.approved_at = datetime.now(timezone.utc)
-    await db.commit()
+    # Convertir TranscriptSegment objects a dicts para serialización JSON
+    editada_dicts = [seg.model_dump() for seg in (body.transcript_editada or [])]
+
+    # Asignar numero de corpus secuencial (con lock para evitar race condition)
+    async with _corpus_lock:
+        max_num = await db.scalar(select(func.max(Video.corpus_number)))
+        corpus_number = (max_num or 0) + 1
+        video.corpus_number = corpus_number
+        video.status = "aprobado"
+        video.transcript_editada = editada_dicts
+        video.approved_at = datetime.now(timezone.utc)
+        await db.commit()
 
     txt_dir = Path(s.tmp_audio_dir)
     username_clean = (video.username or "@desconocido").lstrip("@").replace(" ", "_")[:30]
     folder_label = f"{corpus_number:03d}_{username_clean}"
 
     # Guardar solo la transcripcion en corpus/
+    loop = asyncio.get_event_loop()
     corpus_dir = Path("corpus")
     corpus_dir.mkdir(exist_ok=True)
     txt_name = f"{folder_label}.txt"
     corpus_txt = corpus_dir / txt_name
     logger.info("Guardando transcripcion en %s", corpus_txt)
-    with open(corpus_txt, "w", encoding="utf-8") as f:
-        for seg in (body.transcript_editada or []):
-            text = seg.get("text", "")
-            if text:
-                f.write(f"{text}\n")
 
-    # Guardar transcripcion y metadata en tmp/ para subir a Drive
-    import shutil
-    txt_path = txt_dir / f"{video_id}.txt"
-    shutil.copy2(corpus_txt, txt_path)
-    meta_path = txt_dir / f"{video_id}_metadata.txt"
-    with open(meta_path, "w", encoding="utf-8") as f:
-        f.write(f"URL: {video.url}\n")
-        hashtags = video.hashtags or []
-        if hashtags:
-            f.write(f"Hashtags: {', '.join(hashtags)}\n")
+    def _guardar_corpus():
+        with open(corpus_txt, "w", encoding="utf-8") as f:
+            for seg in editada_dicts:
+                text = seg.get("text", "") if seg else ""
+                if text:
+                    f.write(f"{text}\n")
+        txt_path = txt_dir / f"{video_id}.txt"
+        shutil.copy2(corpus_txt, txt_path)
+        meta_path = txt_dir / f"{video_id}_metadata.txt"
+        with open(meta_path, "w", encoding="utf-8") as f:
+            f.write(f"URL: {video.url}\n")
+            hashtags = video.hashtags or []
+            if hashtags:
+                f.write(f"Hashtags: {', '.join(hashtags)}\n")
 
-    asyncio.create_task(subir_a_drive(video_id, corpus_number))
+    await loop.run_in_executor(None, _guardar_corpus)
 
-    asyncio.create_task(avanzar_ventana_transcripcion())
+    _background(asyncio.create_task(subir_a_drive(video_id, corpus_number)))
+    _background(asyncio.create_task(avanzar_ventana_transcripcion()))
 
     return MensajeResponse(mensaje="Video aprobado correctamente")
 
@@ -298,16 +328,21 @@ async def rechazar_video(
     logger.info("=== RECHAZANDO VIDEO %s ===", video_id)
 
     # Eliminar archivos temporales
+    loop = asyncio.get_event_loop()
     tmp_dir = Path(s.tmp_audio_dir)
-    for f in tmp_dir.glob(f"{video_id}.*"):
-        f.unlink(missing_ok=True)
+
+    def _limpiar_tmp():
+        for f in tmp_dir.glob(f"{video_id}.*"):
+            f.unlink(missing_ok=True)
+
+    await loop.run_in_executor(None, _limpiar_tmp)
 
     # Eliminar registro permanente
     await db.delete(video)
     await db.commit()
     logger.info("Video %s eliminado permanentemente", video_id)
 
-    asyncio.create_task(avanzar_ventana_transcripcion())
+    _background(asyncio.create_task(avanzar_ventana_transcripcion()))
 
     return MensajeResponse(mensaje="Video rechazado y eliminado")
 
@@ -321,6 +356,9 @@ async def eliminar_video(
 
     video = await db.get(Video, video_id)
     deleted_number = video.corpus_number if video else None
+    username = video.username if video else None
+
+    loop = asyncio.get_event_loop()
 
     if video:
         await db.delete(video)
@@ -328,7 +366,7 @@ async def eliminar_video(
         logger.info("Video %s eliminado de la DB", video_id)
 
         # Eliminar archivos locales
-        username_clean = (video.username or "@desconocido").lstrip("@").replace(" ", "_")[:30]
+        username_clean = (username or "@desconocido").lstrip("@").replace(" ", "_")[:30]
         folder_label = f"{deleted_number:03d}_{username_clean}" if deleted_number else video_id
         for ext in [".txt"]:
             (Path("corpus") / f"{folder_label}{ext}").unlink(missing_ok=True)
@@ -336,13 +374,19 @@ async def eliminar_video(
         # Eliminar carpeta de Drive
         if deleted_number:
             drive_folder = f"{deleted_number:03d}_{username_clean}"
-            eliminar_carpeta_video(video_id, s.google_drive_folder_id, drive_folder)
+            logger.info("Buscando carpeta '%s' en Drive para eliminar...", drive_folder)
+            drive_ok = await loop.run_in_executor(None, eliminar_carpeta_video, video_id, s.google_drive_folder_id, drive_folder)
+            if drive_ok:
+                logger.info("Elementos de '%s' eliminados de Drive OK", drive_folder)
+            else:
+                logger.warning("No se pudieron eliminar elementos de '%s' en Drive (puede que ya no existieran)", drive_folder)
 
         # Renumerar videos siguientes
         if deleted_number:
             result = await db.execute(
                 select(Video).where(Video.corpus_number > deleted_number).order_by(Video.corpus_number)
             )
+            renames = []
             for v in result.scalars():
                 old_num = v.corpus_number
                 new_num = old_num - 1
@@ -358,18 +402,20 @@ async def eliminar_video(
                     if old.exists():
                         old.rename(new)
 
-                # Renombrar carpeta en Drive
-                try:
-                    renombrar_carpeta(v.id, s.google_drive_folder_id, old_label, new_label)
-                except Exception as e:
-                    logger.warning("No se pudo renombrar carpeta en Drive: %s", e)
+                renames.append((v.id, s.google_drive_folder_id, old_label, new_label))
 
             await db.commit()
+
+            # Renombrar carpetas en Drive (todos en paralelo en el executor)
+            for args in renames:
+                try:
+                    await loop.run_in_executor(None, renombrar_carpeta, *args)
+                except Exception as e:
+                    logger.warning("No se pudo renombrar carpeta en Drive: %s", e)
     else:
         logger.info("Video %s no estaba en la DB", video_id)
         tmp_dir = Path(s.tmp_audio_dir)
-        for f in tmp_dir.glob(f"{video_id}.*"):
-            f.unlink(missing_ok=True)
+        await loop.run_in_executor(None, lambda: [f.unlink(missing_ok=True) for f in tmp_dir.glob(f"{video_id}.*")])
 
     return MensajeResponse(mensaje="Video eliminado permanentemente")
 
@@ -384,14 +430,31 @@ async def servir_video(video_id: str):
 
 @router.post("/videos/reintentar-errores", response_model=MensajeResponse)
 async def reintentar_errores(db: AsyncSession = Depends(get_db)):
-    from sqlalchemy import update
     stmt = update(Video).where(Video.status == "error").values(status="pendiente")
     result = await db.execute(stmt)
     await db.commit()
     count = result.rowcount
     if count > 0:
-        asyncio.create_task(avanzar_ventana_transcripcion())
+        _background(asyncio.create_task(avanzar_ventana_transcripcion()))
     return MensajeResponse(mensaje=f"{count} videos reencolados para transcripcion")
+
+
+@router.post("/videos/{video_id}/reintentar", response_model=MensajeResponse)
+async def reintentar_video(
+    video_id: str,
+    db: AsyncSession = Depends(get_db),
+):
+    video = await db.get(Video, video_id)
+    if not video:
+        raise HTTPException(status_code=404, detail="Video no encontrado")
+    if video.status != "error":
+        raise HTTPException(status_code=400, detail=f"El video está en estado {video.status}, no se puede reintentar")
+
+    logger.info("=== REINTENTANDO VIDEO %s ===", video_id)
+    video.status = "pendiente"
+    await db.commit()
+    _background(asyncio.create_task(avanzar_ventana_transcripcion()))
+    return MensajeResponse(mensaje="Video reencolado para transcripcion")
 
 
 @router.post("/videos/{video_id}/cancelar-cola", response_model=MensajeResponse)
@@ -409,8 +472,8 @@ async def cancelar_de_cola(
     await db.commit()
     logger.info("Video %s cancelado de la cola", video_id)
 
+    loop = asyncio.get_event_loop()
     tmp_dir = Path(s.tmp_audio_dir)
-    for f in tmp_dir.glob(f"{video_id}.*"):
-        f.unlink(missing_ok=True)
+    await loop.run_in_executor(None, lambda: [f.unlink(missing_ok=True) for f in tmp_dir.glob(f"{video_id}.*")])
 
     return MensajeResponse(mensaje="Video cancelado de la cola")

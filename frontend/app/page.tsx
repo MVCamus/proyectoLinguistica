@@ -5,7 +5,8 @@ import { AppSidebar } from '@/components/app-sidebar'
 import { DiscoveryGrid } from '@/components/discovery-grid'
 import { CorpusView } from '@/components/corpus-view'
 import { NavigationView, Video, CorpusVideo } from '@/lib/types'
-import { fetchVideos, approveVideo, rejectVideo, deleteVideo, ingestarPool, fetchCorpusVideos, fetchProcessingQueue, cancelarCola, ProcessingItem } from '@/lib/api'
+import { fetchVideos, approveVideo, rejectVideo, deleteVideo, ingestarPool, fetchCorpusVideos, fetchProcessingQueue, cancelarCola, reintentarVideo, ProcessingItem, apiVideoToFrontend } from '@/lib/api'
+import { toast } from '@/hooks/use-toast'
 
 export default function Home() {
   const [currentView, setCurrentView] = useState<NavigationView>('discovery')
@@ -15,6 +16,8 @@ export default function Home() {
   const [loading, setLoading] = useState(true)
   const [corpusTotal, setCorpusTotal] = useState(0)
   const pollingRef = useRef<ReturnType<typeof setInterval>>()
+  const failuresRef = useRef(0)
+  const MAX_FAILURES = 10
 
   const totalTarget = 400
 
@@ -22,8 +25,10 @@ export default function Home() {
     try {
       const { videos } = await fetchVideos('listo_para_triage', 24, 0)
       setDiscoveryVideos(videos)
-    } catch {
-      // silently fail, retry on next poll
+      failuresRef.current = 0
+    } catch (err) {
+      console.error('Error al obtener discovery videos:', err)
+      failuresRef.current++
     } finally {
       setLoading(false)
     }
@@ -33,22 +38,27 @@ export default function Home() {
     try {
       const { items } = await fetchProcessingQueue()
       setProcessingQueue(items)
-    } catch {
-      // silently fail
+      failuresRef.current = 0
+    } catch (err) {
+      console.error('Error al obtener cola de procesamiento:', err)
+      failuresRef.current++
     }
   }, [])
 
   const loadCorpus = useCallback(async () => {
     try {
-      const { videos, total } = await fetchCorpusVideos()
-      const corpusVideos: CorpusVideo[] = videos.map((v) => ({
-        ...v,
-        dateAdded: new Date(),
-      }))
+      const { videos, total, rawVideos } = await fetchCorpusVideos()
+      const corpusVideos: CorpusVideo[] = rawVideos.map((v) => {
+        const frontend = apiVideoToFrontend(v)
+        return {
+          ...frontend,
+          dateAdded: v.approved_at ? new Date(v.approved_at) : new Date(),
+        }
+      })
       setCorpus(corpusVideos)
       setCorpusTotal(total)
-    } catch {
-      // silently fail
+    } catch (err) {
+      console.error('Error al obtener corpus:', err)
     }
   }, [])
 
@@ -57,9 +67,15 @@ export default function Home() {
     loadProcessingQueue()
     loadCorpus()
     pollingRef.current = setInterval(() => {
+      if (failuresRef.current >= MAX_FAILURES) {
+        console.warn(`Polling detenido tras ${MAX_FAILURES} fallos consecutivos`)
+        clearInterval(pollingRef.current)
+        pollingRef.current = undefined
+        return
+      }
       loadDiscoveryVideos()
       loadProcessingQueue()
-    }, 3000)
+    }, 15000)
     return () => clearInterval(pollingRef.current)
   }, [loadDiscoveryVideos, loadProcessingQueue, loadCorpus])
 
@@ -76,15 +92,17 @@ export default function Home() {
       text: seg.text,
     }))
     try {
-      await approveVideo(video.id, editada)
+      const resp = await approveVideo(video.id, editada)
       setDiscoveryVideos((prev) => prev.filter((v) => v.id !== video.id))
       setCorpusTotal((prev) => prev + 1)
       setCorpus((prev) => [
         ...prev,
         { ...video, dateAdded: new Date() },
       ])
+      toast({ title: 'Video aprobado', description: 'La transcripción se agregó al corpus' })
     } catch (err) {
       console.error('Error al aprobar:', err)
+      toast({ title: 'Error al aprobar', description: String(err), variant: 'destructive' })
     }
   }, [])
 
@@ -92,8 +110,10 @@ export default function Home() {
     try {
       await rejectVideo(videoId)
       setDiscoveryVideos((prev) => prev.filter((v) => v.id !== videoId))
+      toast({ title: 'Video rechazado', description: 'El video fue eliminado del pool' })
     } catch (err) {
       console.error('Error al rechazar:', err)
+      toast({ title: 'Error al rechazar', description: String(err), variant: 'destructive' })
     }
   }, [])
 
@@ -102,8 +122,10 @@ export default function Home() {
       await deleteVideo(videoId)
       setCorpus((prev) => prev.filter((v) => v.id !== videoId))
       setCorpusTotal((prev) => Math.max(0, prev - 1))
+      toast({ title: 'Video eliminado', description: 'El video se eliminó del corpus' })
     } catch (err) {
       console.error('Error al eliminar video:', err)
+      toast({ title: 'Error al eliminar', description: String(err), variant: 'destructive' })
     }
   }, [])
 
@@ -118,6 +140,8 @@ export default function Home() {
       }, 1000)
     } catch (err) {
       console.error('Error al ingestar:', err)
+      setLoading(false)
+      toast({ title: 'Error al buscar videos', description: String(err), variant: 'destructive' })
     }
   }, [loadDiscoveryVideos, loadProcessingQueue])
 
@@ -127,6 +151,19 @@ export default function Home() {
       setProcessingQueue((prev) => prev.filter((i) => i.id !== videoId))
     } catch (err) {
       console.error('Error al cancelar:', err)
+      toast({ title: 'Error al cancelar', description: String(err), variant: 'destructive' })
+    }
+  }, [])
+
+  const handleReintentar = useCallback(async (videoId: string) => {
+    try {
+      await reintentarVideo(videoId)
+      setProcessingQueue((prev) =>
+        prev.map((i) => (i.id === videoId ? { ...i, status: 'pendiente' } : i))
+      )
+    } catch (err) {
+      console.error('Error al reintentar:', err)
+      toast({ title: 'Error al reintentar', description: String(err), variant: 'destructive' })
     }
   }, [])
 
@@ -140,6 +177,8 @@ export default function Home() {
       }, 1000)
     } catch (err) {
       console.error('Error al procesar URLs:', err)
+      setLoading(false)
+      toast({ title: 'Error al procesar URLs', description: String(err), variant: 'destructive' })
     }
   }, [loadDiscoveryVideos, loadProcessingQueue])
 
@@ -160,6 +199,7 @@ export default function Home() {
             onApprove={handleApprove}
             onReject={handleReject}
             onCancelQueue={handleCancelQueue}
+            onReintentar={handleReintentar}
             onFetchVideos={handleFetchVideos}
             onSubmitUrls={handleSubmitUrls}
             loading={loading}

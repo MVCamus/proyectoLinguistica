@@ -23,7 +23,7 @@ def descargar_audio(
     if _es_url_directa(url):
         return _descargar_desde_cdn(url, video_id, tmp_dir)
 
-    return _descargar_con_ytdlp(url, video_id, tmp_dir, cookies_file)
+    return ytdlp_reintentar(url, video_id, tmp_dir, cookies_file)
 
 
 def _procesar_archivo_local(url: str, video_id: str, tmp_dir: Path) -> Path:
@@ -65,7 +65,10 @@ def _descargar_desde_cdn(url: str, video_id: str, tmp_dir: Path) -> Path:
 
     if not mp4_path.exists():
         logger.info("Descargando video desde CDN: %s", url[:100])
-        r = requests.get(url, timeout=60, stream=True)
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
+        }
+        r = requests.get(url, timeout=60, stream=True, headers=headers)
         r.raise_for_status()
         with open(mp4_path, "wb") as f:
             for chunk in r.iter_content(chunk_size=8192):
@@ -85,19 +88,88 @@ def _descargar_desde_cdn(url: str, video_id: str, tmp_dir: Path) -> Path:
     return mp3_path
 
 
-def _descargar_con_ytdlp(
+def _descargar_solo_video(
     url: str,
     video_id: str,
     tmp_dir: Path,
     cookies_file: Path | None,
 ) -> Path:
-    try:
-        return _ytdlp_descargar(url, video_id, tmp_dir, cookies_file)
-    except Exception as e:
-        logger.warning("Error con cookies, reintentando sin cookies: %s", e)
-        if cookies_file:
-            return _ytdlp_descargar(url, video_id, tmp_dir, None)
-        raise
+    """Descarga el video completo (video+audio) y lo mergea a mp4."""
+    opts: dict = {
+        "format": "bestvideo+bestaudio/best",
+        "outtmpl": str(tmp_dir / "%(id)s.%(ext)s"),
+        "merge_output_format": "mp4",
+        "quiet": True,
+        "no_warnings": True,
+        "extract_flat": False,
+        "http_headers": {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
+            "Accept-Language": "es-ES,es;q=0.9,en;q=0.8",
+            "Referer": "https://www.tiktok.com/",
+        },
+    }
+    if cookies_file and cookies_file.exists():
+        opts["cookiefile"] = str(cookies_file)
+        logger.info("Usando cookies: %s", cookies_file)
+
+    logger.info("Ejecutando yt-dlp en: %s", url[:120])
+    with yt_dlp.YoutubeDL(opts) as ydl:
+        success = ydl.download([url])
+        if success != 0:
+            raise RuntimeError(f"yt-dlp falló con código {success} para la URL: {url[:120]}")
+
+    mp4_path = tmp_dir / f"{video_id}.mp4"
+    if not mp4_path.exists():
+        for f in tmp_dir.glob(f"{video_id}.*"):
+            if f.suffix in (".mp4", ".webm", ".mkv") and f.stat().st_size > 1024:
+                mp4_path = f
+                break
+        else:
+            raise FileNotFoundError(f"Video mp4 no encontrado tras descarga: {video_id}")
+    logger.info("Video descargado: %s (%.1f MB)", mp4_path.name, mp4_path.stat().st_size / 1024 / 1024)
+    return mp4_path
+
+
+def _extraer_audio(video_path: Path, audio_path: Path) -> Path:
+    """Extrae audio con ffmpeg. Reintenta con codec alternativo si falla."""
+    if audio_path.exists():
+        logger.info("Audio ya existe: %s", audio_path)
+        return audio_path
+
+    # Intentos con diferentes configuraciones
+    intentos = [
+        ("mp3 (libmp3lame)", ["ffmpeg", "-i", str(video_path), "-vn", "-acodec", "libmp3lame",
+                               "-q:a", "2", "-y", str(audio_path)]),
+        ("aac",              ["ffmpeg", "-i", str(video_path), "-vn", "-c:a", "aac",
+                               "-b:a", "128k", "-y", str(audio_path.with_suffix(".aac"))]),
+        ("mp3 estricto",     ["ffmpeg", "-i", str(video_path), "-vn", "-acodec", "libmp3lame",
+                               "-q:a", "2", "-strict", "-2", "-y", str(audio_path)]),
+    ]
+
+    ultimo_error = ""
+    for nombre, cmd in intentos:
+        try:
+            logger.info("Extrayendo audio (%s): %s -> ...", nombre, video_path.name)
+            result = subprocess.run(cmd, capture_output=True, timeout=120, check=False)
+            if result.returncode == 0:
+                # Si usamos aac, renombrar a .mp3 (Whisper lo lee igual)
+                salida = Path(cmd[-1])
+                if salida.suffix == ".aac":
+                    salida.rename(audio_path)
+                if audio_path.exists():
+                    logger.info("Audio extraido (%s): %s (%.1f MB)", nombre,
+                                audio_path.name, audio_path.stat().st_size / 1024 / 1024)
+                    return audio_path
+                break
+            stderr_txt = result.stderr.decode("utf-8", errors="replace")[-500:]
+            ultimo_error = f"codigo {result.returncode}: {stderr_txt}"
+            logger.warning("  ffmpeg %s fallo: %s", nombre, ultimo_error)
+        except Exception as e:
+            ultimo_error = str(e)
+            logger.warning("  ffmpeg %s exception: %s", nombre, e)
+
+    raise RuntimeError(f"No se pudo extraer audio de {video_path.name}. Ultimo error: {ultimo_error}")
 
 
 def _ytdlp_descargar(
@@ -106,47 +178,22 @@ def _ytdlp_descargar(
     tmp_dir: Path,
     cookies_file: Path | None,
 ) -> Path:
-    opts: dict = {
-        "format": "best[ext=mp4]/best",
-        "outtmpl": str(tmp_dir / "%(id)s.%(ext)s"),
-        "quiet": True,
-        "no_warnings": True,
-        "extract_flat": False,
-        "postprocessors": [{
-            "key": "FFmpegExtractAudio",
-            "preferredcodec": "mp3",
-            "preferredquality": "192",
-        }],
-        "keepvideo": True,
-    }
-    if cookies_file and cookies_file.exists():
-        opts["cookiefile"] = str(cookies_file)
-        logger.info("Usando cookies: %s", cookies_file)
+    mp4_path = _descargar_solo_video(url, video_id, tmp_dir, cookies_file)
+    audio_path = _extraer_audio(mp4_path, tmp_dir / f"{video_id}.mp3")
+    return audio_path
 
-    logger.info("Ejecutando yt-dlp en: %s", url[:120])
-    with yt_dlp.YoutubeDL(opts) as ydl:
-        ydl.download([url])
 
-    mp4_path = tmp_dir / f"{video_id}.mp4"
-    mp3_path = tmp_dir / f"{video_id}.mp3"
-
-    if not mp4_path.exists():
-        for f in tmp_dir.glob(f"{video_id}.*"):
-            if f.suffix in (".mp4", ".webm", ".mkv"):
-                mp4_path = f
-                break
-        else:
-            logger.warning("No se encontro archivo de video tras descarga")
-    else:
-        logger.info("Video descargado: %s (%.1f MB)", mp4_path, mp4_path.stat().st_size / 1024 / 1024)
-
-    if not mp3_path.exists():
-        for f in tmp_dir.glob(f"{video_id}.*"):
-            if f.suffix == ".mp3":
-                mp3_path = f
-                break
-        else:
-            raise FileNotFoundError(f"Audio mp3 no encontrado tras descarga: {mp3_path}")
-    logger.info("Audio mp3 extraido: %s", mp3_path)
-
-    return mp3_path
+def ytdlp_reintentar(
+    url: str,
+    video_id: str,
+    tmp_dir: Path,
+    cookies_file: Path | None,
+) -> Path:
+    try:
+        return _ytdlp_descargar(url, video_id, tmp_dir, cookies_file)
+    except Exception as e:
+        err_str = str(e).lower()
+        if cookies_file and ("cookie" in err_str or "403" in err_str or "signature" in err_str):
+            logger.warning("Posible error de cookies, reintentando sin cookies: %s", e)
+            return _ytdlp_descargar(url, video_id, tmp_dir, None)
+        raise

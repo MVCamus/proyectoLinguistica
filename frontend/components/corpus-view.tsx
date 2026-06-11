@@ -24,6 +24,7 @@ import {
   AlertDialogCancel,
   AlertDialogAction,
 } from '@/components/ui/alert-dialog'
+import { toast } from '@/hooks/use-toast'
 
 // Spanish 2nd person pronouns to highlight
 const PRONOUNS = ['tú', 'vos', 'usted', 'ustedes', 'te', 'ti', 'contigo', 'os', 'les', 'le']
@@ -35,7 +36,8 @@ function highlightPronouns(text: string, searchTerm: string) {
     terms.push(searchTerm)
   }
   
-  const regex = new RegExp(`(${terms.map(t => t.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|')})`, 'gi')
+  const escaped = terms.map(t => t.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'))
+  const regex = new RegExp(`\\b(${escaped.join('|')})\\b`, 'gi')
   const parts = text.split(regex)
 
   return parts.map((part, i) => {
@@ -69,9 +71,10 @@ export function CorpusView({ corpus, onRemove }: CorpusViewProps) {
   const [searchTerm, setSearchTerm] = useState('')
 
   const filteredCorpus = useMemo(() => {
-    if (!searchTerm) return corpus
+    const sorted = [...corpus].sort((a, b) => (a.corpus_number ?? 0) - (b.corpus_number ?? 0))
+    if (!searchTerm) return sorted
     const lower = searchTerm.toLowerCase()
-    return corpus.filter(
+    return sorted.filter(
       (video) =>
         video.transcript.toLowerCase().includes(lower) ||
         video.author.toLowerCase().includes(lower)
@@ -102,7 +105,10 @@ export function CorpusView({ corpus, onRemove }: CorpusViewProps) {
   }
 
   const handleSyncDrive = () => {
-    alert('Google Drive sync se ejecuta automáticamente al aprobar cada video (Fase B del worker)')
+    toast({
+      title: 'Google Drive Sync',
+      description: 'La sincronización se ejecuta automáticamente al aprobar cada video',
+    })
   }
 
   return (

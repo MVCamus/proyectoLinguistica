@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useCallback, useMemo, useEffect } from 'react'
+import { useState, useCallback, useMemo, useRef, useEffect } from 'react'
 import { Check, X, Loader2 } from 'lucide-react'
 import { Video, TranscriptSegment } from '@/lib/types'
 import { Button } from '@/components/ui/button'
@@ -43,10 +43,16 @@ function formatTimestamp(seconds: number): string {
 
 export function VideoCard({ video, onApprove, onReject }: VideoCardProps) {
   const [segments, setSegments] = useState<TranscriptSegment[]>(video.segments)
+  const initializedRef = useRef(false)
   const isProcessing = video.status === 'descargando' || video.status === 'transcribiendo' || video.status === 'pendiente'
 
+  // Solo inicializar segments la primera vez que se monta el componente,
+  // ignorar actualizaciones posteriores del polling para no perder ediciones
   useEffect(() => {
-    setSegments(video.segments)
+    if (!initializedRef.current) {
+      setSegments(video.segments)
+      initializedRef.current = true
+    }
   }, [video.segments])
 
   const fullTranscript = useMemo(() => {
@@ -122,25 +128,18 @@ export function VideoCard({ video, onApprove, onReject }: VideoCardProps) {
                 <span className="shrink-0 font-mono text-xs px-1.5 py-0.5 rounded bg-muted text-muted-foreground">
                   {formatTimestamp(segment.startTime)}
                 </span>
-                <div
-                  className="flex-1 text-sm leading-relaxed"
-                  contentEditable
-                  suppressContentEditableWarning
-                  onBlur={(e) => {
-                    const newText = e.currentTarget.textContent || ''
-                    if (newText !== segment.text) {
-                      handleSegmentEdit(segment.id, newText)
-                    }
-                  }}
+                <textarea
+                  className="flex-1 text-sm leading-relaxed bg-transparent border-none resize-none focus:outline-none focus:ring-1 focus:ring-primary/30 rounded p-0.5 min-h-[1.25rem]"
+                  value={segment.text}
+                  onChange={(e) => handleSegmentEdit(segment.id, e.target.value)}
                   onKeyDown={(e) => {
                     if (e.key === 'Enter') {
                       e.preventDefault()
                       e.currentTarget.blur()
                     }
                   }}
-                >
-                  {highlightPronouns(segment.text)}
-                </div>
+                  rows={1}
+                />
               </div>
             ))}
           </div>

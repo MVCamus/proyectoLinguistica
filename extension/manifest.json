@@ -4,7 +4,7 @@
   "version": "1.0",
   "description": "Envía el audio de TikTok al servidor del corpus lingüístico",
   "permissions": ["activeTab", "scripting"],
-  "host_permissions": ["https://www.tiktok.com/*", "http://localhost:8000/*"],
+  "host_permissions": ["https://www.tiktok.com/*", "http://localhost:8000/*", "https://localhost:8000/*"],
   "action": {
     "default_title": "Usá el botón verde dentro de TikTok para enviar videos",
     "default_icon": {
