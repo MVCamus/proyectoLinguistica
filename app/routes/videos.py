@@ -104,18 +104,26 @@ async def ingestar_pool(
     for i, url in enumerate(urls):
         order = max_order + 1 + i
         clean_url = re.sub(r'\\u[0-9a-fA-F]{4}', lambda m: chr(int(m.group(0)[2:], 16)), url)
-        raw_id = clean_url.rstrip("/").split("/")[-1].split("?")[0].split(".")[0]
+        # Limpiar la URL de parámetros de búsqueda (?q=...) y fragmentos (#...)
+        clean_url = clean_url.split("?")[0].split("#")[0]
+        
+        raw_id = clean_url.rstrip("/").split("/")[-1].split(".")[0]
         vid_id = raw_id[:50]
         if not vid_id or len(vid_id) < 3:
             vid_id = hashlib.md5(clean_url.encode()).hexdigest()[:16]
         if vid_id in seen_ids:
             continue
         seen_ids.add(vid_id)
+        username = "@pendiente"
+        username_match = re.search(r"tiktok\.com/(@[\w.-]+)/video/", clean_url)
+        if username_match:
+            username = username_match.group(1)
+
         videos.append(
             Video(
                 id=vid_id,
-                url=url,
-                username="@pendiente",
+                url=clean_url,
+                username=username,
                 description="",
                 hashtags=hashtags,
                 duration_sec=None,
@@ -129,6 +137,7 @@ async def ingestar_pool(
         logger.info("Todos los videos ya estaban en la base de datos")
         return IngestaResponse(total_candidatos=0, mensaje="Todos los videos ya estaban en el corpus")
 
+    insertados = len(videos)
     try:
         db.add_all(videos)
         await db.commit()
@@ -144,18 +153,30 @@ async def ingestar_pool(
                     insertados += 1
                 except Exception:
                     await single_session.rollback()
-                    logger.debug("Video %s ya existia, saltando", v.id)
-        videos = videos[:insertados]
-    logger.info("Guardados %d videos en DB", len(videos))
-    for v in videos:
-        logger.debug("  -> %s | %s", v.id, v.url)
+                    logger.debug("Video %s ya existia, revisando estado...", v.id)
+                    try:
+                        existing = await single_session.get(Video, v.id)
+                        if existing:
+                            if existing.status == "error":
+                                existing.status = "pendiente"
+                                existing.error_message = None
+                                existing.url = v.url
+                                await single_session.commit()
+                                insertados += 1
+                                logger.info("Video %s reactivado de 'error' a 'pendiente'", v.id)
+                            else:
+                                logger.debug("Video %s ya existe con estado %s, ignorando", v.id, existing.status)
+                    except Exception as inner_e:
+                        logger.error("Error al reactivar video existente %s: %s", v.id, inner_e)
+                        await single_session.rollback()
+    logger.info("Guardados/Actualizados %d videos en DB", insertados)
 
     _background(asyncio.create_task(avanzar_ventana_transcripcion()))
     logger.info("Tarea avanzar_ventana_transcripcion encolada")
 
     return IngestaResponse(
-        total_candidatos=len(videos),
-        mensaje=f"Ingesta completada: {len(videos)} candidatos agregados al pool",
+        total_candidatos=insertados,
+        mensaje=f"Ingesta completada: {insertados} candidatos agregados al pool",
     )
 
 
@@ -512,7 +533,10 @@ async def reintentar_video(
         raise HTTPException(status_code=400, detail=f"El video está en estado {video.status}, no se puede reintentar")
 
     logger.info("=== REINTENTANDO VIDEO %s ===", video_id)
+    if video.url and not video.url.startswith("file://"):
+        video.url = video.url.split("?")[0].split("#")[0]
     video.status = "pendiente"
+    video.error_message = None
     await db.commit()
     _background(asyncio.create_task(avanzar_ventana_transcripcion()))
     return MensajeResponse(mensaje="Video reencolado para transcripcion")

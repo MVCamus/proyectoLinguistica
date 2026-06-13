@@ -31,6 +31,7 @@ class VideoOut(BaseModel):
     transcript_original: list[TranscriptSegment] | None
     transcript_editada: list[TranscriptSegment] | None
     drive_url: str | None
+    error_message: str | None = None
     corpus_number: int | None
     shuffle_order: int | None
     created_at: datetime

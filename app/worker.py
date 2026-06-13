@@ -50,6 +50,7 @@ async def transcribir_video(video_id: str):
         logger.info("Video %s marcado como 'descargando'", video_id)
         logger.info("URL del video: %s", video.url)
 
+        url_extract = video.url.split("?")[0].split("#")[0] if not video.url.startswith("file://") else video.url
         try:
             loop = asyncio.get_event_loop()
             with yt.YoutubeDL({
@@ -62,7 +63,7 @@ async def transcribir_video(video_id: str):
                     "Referer": "https://www.tiktok.com/",
                 },
             }) as ydl:
-                info = await loop.run_in_executor(None, lambda: ydl.extract_info(video.url, download=False))
+                info = await loop.run_in_executor(None, lambda: ydl.extract_info(url_extract, download=False))
                 if info:
                     username = info.get("uploader") or info.get("channel") or info.get("creator") or video.username
                     if username and username != video.username:
@@ -83,6 +84,14 @@ async def transcribir_video(video_id: str):
         except Exception as e:
             logger.warning("No se pudo extraer metadata con yt-dlp: %s", e)
 
+        # Fallback para obtener el usuario del URL si yt-dlp falló o no lo extrajo
+        if video.username == "@pendiente" and video.url:
+            username_match = re.search(r"tiktok\.com/(@[\w.-]+)/video/", video.url)
+            if username_match:
+                video.username = username_match.group(1)
+                await session.commit()
+                logger.info("Username extraído del URL (fallback): %s", video.username)
+
         logger.info("Descargando audio...")
         audio_path = await loop.run_in_executor(None, descargar_audio, video.url, video_id, tmp_dir)
         logger.info("Audio descargado: %s (%.1f MB)", audio_path, audio_path.stat().st_size / 1024 / 1024)
@@ -101,6 +110,7 @@ async def transcribir_video(video_id: str):
 
         video.transcript_original = segmentos
         video.status = "listo_para_triage"
+        video.error_message = None
         await session.commit()
         logger.info("Video %s listo para triage", video_id)
 
@@ -126,13 +136,19 @@ async def transcribir_video(video_id: str):
             video = await session.get(Video, video_id)
             if video:
                 video.status = "error"
+                err_str = str(exc).lower()
+                if any(x in err_str for x in ("rehydration", "webpage request", "429", "too many requests", "captcha", "challenge")):
+                    err_msg = "Límite de descargas de TikTok alcanzado (muchas descargas en poco tiempo). Por favor, intenta de nuevo en unos minutos o cambia de red."
+                else:
+                    err_msg = f"Error de procesamiento: {str(exc).strip() or repr(exc)}"
+                video.error_message = err_msg
                 await session.commit()
                 logger.error("Video %s marcado como 'error'", video_id)
         except StaleDataError:
             logger.warning("Video %s ya no existe en DB", video_id)
         except Exception as e:
             logger.warning("No se pudo marcar video %s como error: %s", video_id, e)
-        return {"status": "error", "video_id": video_id, "motivo": str(exc)}
+        return {"status": "error", "video_id": video_id, "motivo": str(exc) or repr(exc)}
 
     finally:
         await session.close()

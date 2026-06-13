@@ -40,7 +40,11 @@ async function send() {
 
     const data = await resp.json()
     const count = data?.total_candidatos ?? '?'
-    setBtnState(btn, '✔ En cola (' + count + ')', '#16a34a')
+    if (count === 0) {
+      setBtnState(btn, '✔ Ya en corpus', '#0284c7')
+    } else {
+      setBtnState(btn, '✔ En cola (' + count + ')', '#16a34a')
+    }
   } catch (e) {
     console.error('Error detallado de Maite Corpus Extensión:', e)
     const msg = e.message.length > 80 ? e.message.slice(0, 77) + '...' : e.message

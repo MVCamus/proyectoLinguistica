@@ -27,6 +27,7 @@ class Video(Base):
     transcript_original: Mapped[list[Any] | None] = mapped_column(JSON)
     transcript_editada: Mapped[list[Any] | None] = mapped_column(JSON)
     drive_url: Mapped[str | None] = mapped_column(Text)
+    error_message: Mapped[str | None] = mapped_column(Text)
 
     corpus_number: Mapped[int | None] = mapped_column(Integer, index=True)
 

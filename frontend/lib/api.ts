@@ -17,6 +17,7 @@ export interface ApiVideo {
   transcript_original: ApiSegment[] | null
   transcript_editada: ApiSegment[] | null
   drive_url: string | null
+  error_message: string | null
   corpus_number: number | null
   shuffle_order: number | null
   created_at: string
@@ -161,6 +162,7 @@ export interface ProcessingItem {
   id: string
   url: string
   status: string  // 'pendiente' | 'descargando' | 'transcribiendo' | 'error'
+  errorMessage?: string
 }
 
 export async function fetchProcessingQueue() {
@@ -174,6 +176,7 @@ export async function fetchProcessingQueue() {
       id: v.id,
       url: v.url,
       status: v.status,
+      errorMessage: v.error_message,
     })),
     total: data.total,
   }

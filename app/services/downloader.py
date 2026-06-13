@@ -9,6 +9,47 @@ import yt_dlp
 logger = logging.getLogger("maite.downloader")
 
 
+def _descargar_via_tikwm(url: str, video_id: str, tmp_dir: Path) -> Path | None:
+    logger.info("Intentando descargar video a través de TikWM API para: %s", url)
+    try:
+        r = requests.post("https://www.tikwm.com/api/", data={"url": url}, timeout=15)
+        if r.status_code == 200:
+            data = r.json()
+            if data.get("code") == 0 and "data" in data:
+                play_url = data["data"].get("play") or data["data"].get("wmplay")
+                if play_url:
+                    logger.info("URL directa obtenida de TikWM: %s", play_url[:100])
+                    return _descargar_desde_cdn(play_url, video_id, tmp_dir)
+            logger.warning("TikWM API respondió con error: %s", data.get("msg"))
+    except Exception as e:
+        logger.warning("Error descargando con TikWM API: %s", e)
+    return None
+
+
+def _descargar_via_lovetik(url: str, video_id: str, tmp_dir: Path) -> Path | None:
+    logger.info("Intentando descargar video a través de Lovetik API para: %s", url)
+    try:
+        r = requests.post("https://lovetik.com/api/ajax/search", data={"query": url}, timeout=15)
+        if r.status_code == 200:
+            data = r.json()
+            if data.get("status") == "ok" and data.get("links"):
+                play_url = None
+                for link in data["links"]:
+                    if link.get("t") == "MP4" or "mp4" in str(link.get("t")).lower():
+                        play_url = link.get("a")
+                        break
+                if not play_url and data["links"]:
+                    play_url = data["links"][0].get("a")
+
+                if play_url:
+                    logger.info("URL directa obtenida de Lovetik: %s", play_url[:100])
+                    return _descargar_desde_cdn(play_url, video_id, tmp_dir)
+            logger.warning("Lovetik API respondió con error o sin links: %s", data.get("mess"))
+    except Exception as e:
+        logger.warning("Error descargando con Lovetik API: %s", e)
+    return None
+
+
 def descargar_audio(
     url: str,
     video_id: str,
@@ -20,10 +61,25 @@ def descargar_audio(
     if url.startswith("file://"):
         return _procesar_archivo_local(url, video_id, tmp_dir)
 
+    if not url.startswith("file://"):
+        url = url.split("?")[0].split("#")[0]
+
     if _es_url_directa(url):
         return _descargar_desde_cdn(url, video_id, tmp_dir)
 
+    # 1. Intentar con TikWM API
+    mp3_path = _descargar_via_tikwm(url, video_id, tmp_dir)
+    if mp3_path and mp3_path.exists():
+        return mp3_path
+
+    # 2. Intentar con Lovetik API
+    mp3_path = _descargar_via_lovetik(url, video_id, tmp_dir)
+    if mp3_path and mp3_path.exists():
+        return mp3_path
+
+    # 3. Fallback a yt-dlp
     return ytdlp_reintentar(url, video_id, tmp_dir, cookies_file)
+
 
 
 def _procesar_archivo_local(url: str, video_id: str, tmp_dir: Path) -> Path:
