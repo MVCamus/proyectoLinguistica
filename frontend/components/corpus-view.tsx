@@ -1,7 +1,7 @@
 'use client'
 
 import { useState, useMemo } from 'react'
-import { Search, Download, Cloud, Trash2, Hash } from 'lucide-react'
+import { Search, Trash2 } from 'lucide-react'
 import { CorpusVideo } from '@/lib/types'
 import { Input } from '@/components/ui/input'
 import { Button } from '@/components/ui/button'
@@ -24,43 +24,13 @@ import {
   AlertDialogCancel,
   AlertDialogAction,
 } from '@/components/ui/alert-dialog'
-import { toast } from '@/hooks/use-toast'
-
-// Spanish 2nd person pronouns to highlight
-const PRONOUNS = ['tú', 'vos', 'usted', 'ustedes', 'te', 'ti', 'contigo', 'os', 'les', 'le']
-
-function highlightPronouns(text: string, searchTerm: string) {
-  // Combine pronouns and search term for highlighting
-  const terms = [...PRONOUNS]
-  if (searchTerm) {
-    terms.push(searchTerm)
-  }
-  
-  const escaped = terms.map(t => t.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'))
-  const regex = new RegExp(`\\b(${escaped.join('|')})\\b`, 'gi')
-  const parts = text.split(regex)
-
-  return parts.map((part, i) => {
-    const isPronoun = PRONOUNS.some((p) => p.toLowerCase() === part.toLowerCase())
-    const isSearchMatch = searchTerm && part.toLowerCase() === searchTerm.toLowerCase()
-    
-    if (isPronoun) {
-      return (
-        <span key={i} className="bg-highlight text-highlight-foreground font-bold px-0.5 rounded">
-          {part}
-        </span>
-      )
-    }
-    if (isSearchMatch) {
-      return (
-        <span key={i} className="bg-primary/30 text-foreground font-semibold px-0.5 rounded">
-          {part}
-        </span>
-      )
-    }
-    return part
-  })
-}
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select'
 
 interface CorpusViewProps {
   corpus: CorpusVideo[]
@@ -69,47 +39,53 @@ interface CorpusViewProps {
 
 export function CorpusView({ corpus, onRemove }: CorpusViewProps) {
   const [searchTerm, setSearchTerm] = useState('')
+  const [sortOption, setSortOption] = useState('corpus_asc')
 
   const filteredCorpus = useMemo(() => {
-    const sorted = [...corpus].sort((a, b) => (a.corpus_number ?? 0) - (b.corpus_number ?? 0))
-    if (!searchTerm) return sorted
-    const lower = searchTerm.toLowerCase()
-    return sorted.filter(
-      (video) =>
-        video.transcript.toLowerCase().includes(lower) ||
-        video.author.toLowerCase().includes(lower)
-    )
-  }, [corpus, searchTerm])
+    // 1. Filtrar los videos según el término de búsqueda
+    let result = [...corpus]
+    if (searchTerm) {
+      const lower = searchTerm.toLowerCase()
+      const searchNum = Number(lower.trim())
+      const isNumericSearch = !isNaN(searchNum) && lower.trim() !== ''
 
-  const handleExportCSV = () => {
-    const headers = ['#', 'video_id', 'url', 'username', 'description', 'hashtags', 'transcript', 'duration_sec', 'date_added']
-    const rows = corpus.map((v, i) => [
-      v.corpus_number ?? i + 1,
-      v.id,
-      v.url,
-      v.author,
-      `"${(v.description || '').replace(/"/g, '""')}"`,
-      `"${(v.hashtags || []).join(';')}"`,
-      `"${v.transcript.replace(/"/g, '""')}"`,
-      v.duration,
-      v.dateAdded.toISOString(),
-    ])
-    const csv = [headers.join(','), ...rows.map((r) => r.join(','))].join('\n')
-    const blob = new Blob([csv], { type: 'text/csv; charset=utf-8' })
-    const url = URL.createObjectURL(blob)
-    const a = document.createElement('a')
-    a.href = url
-    a.download = 'corpus-export.csv'
-    a.click()
-    URL.revokeObjectURL(url)
-  }
+      if (isNumericSearch) {
+        result = result.filter((video) => video.corpus_number === searchNum)
+      } else {
+        result = result.filter(
+          (video) =>
+            video.transcript.toLowerCase().includes(lower) ||
+            video.author.toLowerCase().includes(lower) ||
+            (lower.length >= 5 && video.id.toLowerCase().includes(lower))
+        )
+      }
+    }
 
-  const handleSyncDrive = () => {
-    toast({
-      title: 'Google Drive Sync',
-      description: 'La sincronización se ejecuta automáticamente al aprobar cada video',
+    // 2. Ordenar según el criterio seleccionado
+    result.sort((a, b) => {
+      switch (sortOption) {
+        case 'corpus_desc':
+          return (b.corpus_number ?? 0) - (a.corpus_number ?? 0)
+        case 'date_desc':
+          return new Date(b.dateAdded).getTime() - new Date(a.dateAdded).getTime()
+        case 'date_asc':
+          return new Date(a.dateAdded).getTime() - new Date(b.dateAdded).getTime()
+        case 'duration_desc':
+          return (b.duration ?? 0) - (a.duration ?? 0)
+        case 'duration_asc':
+          return (a.duration ?? 0) - (b.duration ?? 0)
+        case 'author_asc':
+          return (a.author || '').localeCompare(b.author || '')
+        case 'author_desc':
+          return (b.author || '').localeCompare(a.author || '')
+        case 'corpus_asc':
+        default:
+          return (a.corpus_number ?? 0) - (b.corpus_number ?? 0)
+      }
     })
-  }
+
+    return result
+  }, [corpus, searchTerm, sortOption])
 
   return (
     <div className="flex-1 flex flex-col overflow-hidden">
@@ -122,27 +98,36 @@ export function CorpusView({ corpus, onRemove }: CorpusViewProps) {
               {corpus.length} videos aprobados
             </p>
           </div>
-          <div className="flex items-center gap-2">
-            <Button variant="outline" size="sm" onClick={handleSyncDrive}>
-              <Cloud className="h-4 w-4 mr-1.5" />
-              Sync to Drive
-            </Button>
-            <Button variant="outline" size="sm" onClick={handleExportCSV}>
-              <Download className="h-4 w-4 mr-1.5" />
-              Download CSV
-            </Button>
-          </div>
         </div>
 
-        {/* Search */}
-        <div className="relative">
-          <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-          <Input
-            placeholder="Buscar en transcripciones (ej: usted, tú, vos...)"
-            value={searchTerm}
-            onChange={(e) => setSearchTerm(e.target.value)}
-            className="pl-9"
-          />
+        {/* Search & Sort Dropdown */}
+        <div className="flex gap-4">
+          <div className="relative flex-1">
+            <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+            <Input
+              placeholder="Buscar por ID de video, transcripción o usuario..."
+              value={searchTerm}
+              onChange={(e) => setSearchTerm(e.target.value)}
+              className="pl-9"
+            />
+          </div>
+          <div className="w-[280px] shrink-0">
+            <Select value={sortOption} onValueChange={setSortOption}>
+              <SelectTrigger className="bg-secondary/50 border-border">
+                <SelectValue placeholder="Ordenar por..." />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="corpus_asc">Corpus # (Menor a Mayor)</SelectItem>
+                <SelectItem value="corpus_desc">Corpus # (Mayor a Menor)</SelectItem>
+                <SelectItem value="date_desc">Fecha Aprobación (Más reciente primero)</SelectItem>
+                <SelectItem value="date_asc">Fecha Aprobación (Más antiguo primero)</SelectItem>
+                <SelectItem value="duration_desc">Duración (Mayor a Menor)</SelectItem>
+                <SelectItem value="duration_asc">Duración (Menor a Mayor)</SelectItem>
+                <SelectItem value="author_asc">Usuario (A-Z)</SelectItem>
+                <SelectItem value="author_desc">Usuario (Z-A)</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
         </div>
       </div>
 
@@ -184,7 +169,7 @@ export function CorpusView({ corpus, onRemove }: CorpusViewProps) {
                     {video.author}
                   </TableCell>
                   <TableCell className="text-sm leading-relaxed whitespace-normal max-w-md">
-                    {highlightPronouns(video.transcript, searchTerm)}
+                    {video.transcript}
                   </TableCell>
                   <TableCell className="text-right text-sm text-muted-foreground">
                     {video.duration}s

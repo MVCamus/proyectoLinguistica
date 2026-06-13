@@ -115,6 +115,12 @@ export async function deleteVideo(videoId: string) {
   return res.json()
 }
 
+export async function fetchDriveSyncStatus() {
+  const res = await fetch(`${API_BASE}/api/tasks/drive-sync-status`)
+  if (!res.ok) throw new Error('Error al obtener estado de sincronización de Drive')
+  return res.json() as Promise<{ active: boolean; current: number; total: number; message: string }>
+}
+
 export async function cancelarCola(videoId: string) {
   const res = await fetch(`${API_BASE}/api/videos/${videoId}/cancelar-cola`, {
     method: 'POST',

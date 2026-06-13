@@ -8,7 +8,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 import httpx
-from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
+from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile, BackgroundTasks
 from fastapi.responses import FileResponse, JSONResponse
 from sqlalchemy import select, func, update
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -34,6 +34,20 @@ router = APIRouter()
 
 _corpus_lock = asyncio.Lock()
 _background_tasks: set[asyncio.Task] = set()
+
+# Estado global para el progreso de renombrado/sincronización de Drive
+_drive_sync_progress = {
+    "active": False,
+    "current": 0,
+    "total": 0,
+    "message": ""
+}
+
+
+@router.get("/tasks/drive-sync-status")
+async def obtener_estado_drive_sync():
+    return _drive_sync_progress
+
 
 
 def _background(task: asyncio.Task) -> None:
@@ -347,46 +361,90 @@ async def rechazar_video(
     return MensajeResponse(mensaje="Video rechazado y eliminado")
 
 
+async def _background_drive_sync(
+    video_id: str,
+    deleted_number: int | None,
+    username: str | None,
+    renames: list[tuple]
+):
+    global _drive_sync_progress
+    _drive_sync_progress["active"] = True
+    _drive_sync_progress["current"] = 0
+    _drive_sync_progress["total"] = (1 if deleted_number else 0) + len(renames)
+    
+    loop = asyncio.get_event_loop()
+    
+    # 1. Eliminar carpeta del video en Drive
+    if deleted_number and username:
+        username_clean = (username or "@desconocido").lstrip("@").replace(" ", "_")[:30]
+        drive_folder = f"{deleted_number:03d}_{username_clean}"
+        _drive_sync_progress["message"] = f"Eliminando carpeta '{drive_folder}' de Google Drive..."
+        try:
+            drive_ok = await loop.run_in_executor(
+                None, eliminar_carpeta_video, video_id, s.google_drive_folder_id, drive_folder
+            )
+            if drive_ok:
+                logger.info("Carpeta '%s' eliminada de Drive OK", drive_folder)
+            else:
+                logger.warning("No se pudo eliminar '%s' en Drive", drive_folder)
+        except Exception as e:
+            logger.error("Error al eliminar carpeta en Drive: %s", e)
+        
+        _drive_sync_progress["current"] += 1
+
+    # 2. Renombrar carpetas de los videos siguientes en Drive
+    for vid, parent_id, old_label, new_label in renames:
+        _drive_sync_progress["message"] = f"Renombrando carpeta {old_label} a {new_label} en Drive..."
+        try:
+            await loop.run_in_executor(None, renombrar_carpeta, vid, parent_id, old_label, new_label)
+        except Exception as e:
+            logger.warning("No se pudo renombrar carpeta en Drive: %s", e)
+        
+        _drive_sync_progress["current"] += 1
+
+    # Finalizar
+    _drive_sync_progress["active"] = False
+    _drive_sync_progress["message"] = "Actualización de Google Drive completada."
+
+
 @router.delete("/videos/{video_id}", response_model=MensajeResponse)
 async def eliminar_video(
     video_id: str,
+    background_tasks: BackgroundTasks,
     db: AsyncSession = Depends(get_db),
 ):
     logger.info("=== ELIMINANDO VIDEO %s ===", video_id)
 
-    video = await db.get(Video, video_id)
-    deleted_number = video.corpus_number if video else None
-    username = video.username if video else None
+    async with _corpus_lock:
+        video = await db.get(Video, video_id)
+        if not video:
+            logger.info("Video %s no estaba en la DB", video_id)
+            loop = asyncio.get_event_loop()
+            tmp_dir = Path(s.tmp_audio_dir)
+            await loop.run_in_executor(None, lambda: [f.unlink(missing_ok=True) for f in tmp_dir.glob(f"{video_id}.*")])
+            return MensajeResponse(mensaje="Video no encontrado o ya eliminado")
 
-    loop = asyncio.get_event_loop()
+        deleted_number = video.corpus_number
+        username = video.username
 
-    if video:
+        # Eliminar de la base de datos
         await db.delete(video)
         await db.commit()
         logger.info("Video %s eliminado de la DB", video_id)
 
         # Eliminar archivos locales
-        username_clean = (username or "@desconocido").lstrip("@").replace(" ", "_")[:30]
-        folder_label = f"{deleted_number:03d}_{username_clean}" if deleted_number else video_id
-        for ext in [".txt"]:
-            (Path("corpus") / f"{folder_label}{ext}").unlink(missing_ok=True)
-
-        # Eliminar carpeta de Drive
         if deleted_number:
-            drive_folder = f"{deleted_number:03d}_{username_clean}"
-            logger.info("Buscando carpeta '%s' en Drive para eliminar...", drive_folder)
-            drive_ok = await loop.run_in_executor(None, eliminar_carpeta_video, video_id, s.google_drive_folder_id, drive_folder)
-            if drive_ok:
-                logger.info("Elementos de '%s' eliminados de Drive OK", drive_folder)
-            else:
-                logger.warning("No se pudieron eliminar elementos de '%s' en Drive (puede que ya no existieran)", drive_folder)
+            username_clean = (username or "@desconocido").lstrip("@").replace(" ", "_")[:30]
+            folder_label = f"{deleted_number:03d}_{username_clean}"
+            for ext in [".txt"]:
+                (Path("corpus") / f"{folder_label}{ext}").unlink(missing_ok=True)
 
-        # Renumerar videos siguientes
+        # Renumerar videos siguientes en DB y renombrar archivos locales
+        renames = []
         if deleted_number:
             result = await db.execute(
                 select(Video).where(Video.corpus_number > deleted_number).order_by(Video.corpus_number)
             )
-            renames = []
             for v in result.scalars():
                 old_num = v.corpus_number
                 new_num = old_num - 1
@@ -406,18 +464,21 @@ async def eliminar_video(
 
             await db.commit()
 
-            # Renombrar carpetas en Drive (todos en paralelo en el executor)
-            for args in renames:
-                try:
-                    await loop.run_in_executor(None, renombrar_carpeta, *args)
-                except Exception as e:
-                    logger.warning("No se pudo renombrar carpeta en Drive: %s", e)
-    else:
-        logger.info("Video %s no estaba en la DB", video_id)
-        tmp_dir = Path(s.tmp_audio_dir)
-        await loop.run_in_executor(None, lambda: [f.unlink(missing_ok=True) for f in tmp_dir.glob(f"{video_id}.*")])
+        # Encolar tareas pesadas de Drive en segundo plano
+        if deleted_number:
+            background_tasks.add_task(
+                _background_drive_sync,
+                video_id,
+                deleted_number,
+                username,
+                renames
+            )
+        else:
+            loop = asyncio.get_event_loop()
+            tmp_dir = Path(s.tmp_audio_dir)
+            await loop.run_in_executor(None, lambda: [f.unlink(missing_ok=True) for f in tmp_dir.glob(f"{video_id}.*")])
 
-    return MensajeResponse(mensaje="Video eliminado permanentemente")
+    return MensajeResponse(mensaje="Video eliminado. Sincronización de Drive en segundo plano iniciada.")
 
 
 @router.get("/video-file/{video_id}")

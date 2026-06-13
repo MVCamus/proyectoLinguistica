@@ -42,6 +42,7 @@ async function send() {
     const count = data?.total_candidatos ?? '?'
     setBtnState(btn, '✔ En cola (' + count + ')', '#16a34a')
   } catch (e) {
+    console.error('Error detallado de Maite Corpus Extensión:', e)
     const msg = e.message.length > 80 ? e.message.slice(0, 77) + '...' : e.message
     setBtnState(btn, '❌ ' + msg, '#dc2626')
   } finally {

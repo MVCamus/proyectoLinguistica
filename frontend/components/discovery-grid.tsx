@@ -16,46 +16,13 @@ interface DiscoveryGridProps {
   onReject: (videoId: string) => void
   onCancelQueue?: (videoId: string) => void
   onReintentar?: (videoId: string) => void
-  onFetchVideos?: (hashtags: string[]) => void
   onSubmitUrls?: (urls: string[]) => void
   loading?: boolean
 }
 
-export function DiscoveryGrid({ videos, processingQueue, onApprove, onReject, onCancelQueue, onReintentar, onFetchVideos, onSubmitUrls, loading }: DiscoveryGridProps) {
-  const [hashtagInput, setHashtagInput] = useState('')
-  const [activeHashtags, setActiveHashtags] = useState<string[]>(['#storytime', '#vlog'])
+export function DiscoveryGrid({ videos, processingQueue, onApprove, onReject, onCancelQueue, onReintentar, onSubmitUrls, loading }: DiscoveryGridProps) {
   const [urlInput, setUrlInput] = useState('')
   const [showUrlInput, setShowUrlInput] = useState(false)
-
-  const handleAddHashtag = useCallback(() => {
-    if (!hashtagInput.trim()) return
-    const tag = hashtagInput.trim().startsWith('#')
-      ? hashtagInput.trim()
-      : `#${hashtagInput.trim()}`
-    if (!activeHashtags.includes(tag.toLowerCase())) {
-      const newTags = [...activeHashtags, tag.toLowerCase()]
-      setActiveHashtags(newTags)
-      onFetchVideos?.(newTags)
-    }
-    setHashtagInput('')
-  }, [hashtagInput, activeHashtags, onFetchVideos])
-
-  const handleRemoveHashtag = useCallback((tag: string) => {
-    const newTags = activeHashtags.filter(t => t !== tag)
-    setActiveHashtags(newTags)
-    onFetchVideos?.(newTags)
-  }, [activeHashtags, onFetchVideos])
-
-  const handleKeyDown = useCallback((e: React.KeyboardEvent) => {
-    if (e.key === 'Enter') {
-      e.preventDefault()
-      handleAddHashtag()
-    }
-  }, [handleAddHashtag])
-
-  const handleFetch = useCallback(() => {
-    onFetchVideos?.(activeHashtags)
-  }, [activeHashtags, onFetchVideos])
 
   const shortUrl = (url: string) => {
     try {
@@ -119,44 +86,6 @@ export function DiscoveryGrid({ videos, processingQueue, onApprove, onReject, on
           <p className="text-sm text-muted-foreground mt-1">
             Revisa y aprueba transcripciones para tu corpus de investigación
           </p>
-        </div>
-
-        <div className="px-6 pb-4 space-y-3">
-          <div className="flex gap-2">
-            <div className="relative flex-1">
-              <Hash className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-              <Input
-                type="text"
-                placeholder="Agregar hashtag semilla (ej: storytime, vlog, español)"
-                value={hashtagInput}
-                onChange={(e) => setHashtagInput(e.target.value)}
-                onKeyDown={handleKeyDown}
-                className="pl-9 bg-secondary/50 border-border"
-              />
-            </div>
-            <Button variant="secondary" onClick={handleAddHashtag} disabled={!hashtagInput.trim()}>
-              <Search className="h-4 w-4 mr-2" />Agregar
-            </Button>
-            <Button variant="default" onClick={handleFetch} disabled={activeHashtags.length === 0}>
-              <RefreshCw className="h-4 w-4 mr-2" />Buscar Videos
-            </Button>
-          </div>
-
-          {activeHashtags.length > 0 && (
-            <div className="flex items-center gap-2 flex-wrap">
-              <span className="text-xs text-muted-foreground font-medium">Filtros activos:</span>
-              {activeHashtags.map((tag) => (
-                <button
-                  key={tag}
-                  onClick={() => handleRemoveHashtag(tag)}
-                  className="inline-flex items-center gap-1 px-2 py-1 rounded-md text-xs font-medium bg-primary/10 text-primary border border-primary/20 hover:bg-primary/20 transition-colors"
-                >
-                  {tag}
-                  <X className="h-3 w-3" />
-                </button>
-              ))}
-            </div>
-          )}
         </div>
       </div>
 
