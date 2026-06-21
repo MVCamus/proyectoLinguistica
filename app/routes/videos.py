@@ -673,6 +673,61 @@ async def sincronizar_corpus_txt():
     return MensajeResponse(mensaje="Sincronizacion de archivos .txt iniciada en segundo plano")
 
 
+@router.get("/corpus/verify-txt")
+async def verificar_corpus_txt(db: AsyncSession = Depends(get_db)):
+    result = await db.execute(
+        select(Video)
+        .where(Video.status == "aprobado")
+        .order_by(Video.corpus_number)
+    )
+    aprobados = result.scalars().all()
+
+    corpus_dir = Path("corpus")
+    existing_files: dict[str, Path] = {p.name: p for p in corpus_dir.glob("*.txt")}
+
+    expected_files: set[str] = set()
+    expected_by_number: dict[int, str] = {}
+    missing: list[dict] = []
+    orphans: list[str] = []
+    duplicates: list[dict] = []
+
+    for v in aprobados:
+        if not v.corpus_number:
+            continue
+        username_clean = (v.username or "@desconocido").lstrip("@").replace(" ", "_")[:30]
+        txt_name = f"{v.corpus_number:03d}_{username_clean}.txt"
+        expected_files.add(txt_name)
+        expected_by_number[v.corpus_number] = txt_name
+
+        if txt_name not in existing_files:
+            missing.append({
+                "corpus_number": v.corpus_number,
+                "expected_file": txt_name,
+                "video_id": v.id,
+            })
+
+    for fname in existing_files:
+        if fname in expected_files:
+            continue
+        parsed = _parse_corpus_number(fname)
+        if parsed is not None and parsed in expected_by_number:
+            duplicates.append({
+                "file": fname,
+                "expected": expected_by_number[parsed],
+            })
+        else:
+            orphans.append(fname)
+
+    return {
+        "ok": len(missing) == 0 and len(orphans) == 0 and len(duplicates) == 0,
+        "total_aprobados": len(aprobados),
+        "total_txt": len(existing_files),
+        "missing": missing,
+        "orphans": orphans,
+        "duplicates": duplicates,
+    }
+
+
 @router.post("/videos/{video_id}/cancelar-cola", response_model=MensajeResponse)
 async def cancelar_de_cola(
     video_id: str,

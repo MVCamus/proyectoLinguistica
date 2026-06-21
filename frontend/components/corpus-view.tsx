@@ -1,8 +1,9 @@
 'use client'
 
 import { useState, useMemo } from 'react'
-import { Search, Trash2, RefreshCw, X } from 'lucide-react'
+import { Search, Trash2, RefreshCw, X, CheckCircle2 } from 'lucide-react'
 import { CorpusVideo } from '@/lib/types'
+import { CorpusVerifyResult } from '@/lib/api'
 import { Input } from '@/components/ui/input'
 import { Button } from '@/components/ui/button'
 import {
@@ -31,6 +32,13 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select'
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogDescription,
+} from '@/components/ui/dialog'
 
 interface CorpusViewProps {
   corpus: CorpusVideo[]
@@ -38,11 +46,15 @@ interface CorpusViewProps {
   onSyncTxt: () => void
   syncStatus: { active: boolean; current: number; total: number; message: string; created: number; ok: number; deleted: number } | null
   onDismissSync: () => void
+  onVerifyTxt: () => Promise<CorpusVerifyResult>
 }
 
-export function CorpusView({ corpus, onRemove, onSyncTxt, syncStatus, onDismissSync }: CorpusViewProps) {
+export function CorpusView({ corpus, onRemove, onSyncTxt, syncStatus, onDismissSync, onVerifyTxt }: CorpusViewProps) {
   const [searchTerm, setSearchTerm] = useState('')
   const [sortOption, setSortOption] = useState('corpus_asc')
+  const [verifyResult, setVerifyResult] = useState<CorpusVerifyResult | null>(null)
+  const [verifyOpen, setVerifyOpen] = useState(false)
+  const [verifying, setVerifying] = useState(false)
 
   const filteredCorpus = useMemo(() => {
     let result = [...corpus]
@@ -92,6 +104,20 @@ export function CorpusView({ corpus, onRemove, onSyncTxt, syncStatus, onDismissS
     ? Math.round((syncStatus.current / syncStatus.total) * 100)
     : 0
 
+  const handleVerify = async () => {
+    setVerifying(true)
+    try {
+      const result = await onVerifyTxt()
+      setVerifyResult(result)
+      setVerifyOpen(true)
+    } catch {
+    } finally {
+      setVerifying(false)
+    }
+  }
+
+  const hasIssues = verifyResult && (!verifyResult.ok)
+
   return (
     <div className="flex-1 flex flex-col overflow-hidden">
       {/* Header */}
@@ -103,16 +129,28 @@ export function CorpusView({ corpus, onRemove, onSyncTxt, syncStatus, onDismissS
               {corpus.length} videos aprobados
             </p>
           </div>
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={onSyncTxt}
-            disabled={syncStatus?.active}
-            className="gap-2"
-          >
-            <RefreshCw className={`h-4 w-4 ${syncStatus?.active ? 'animate-spin' : ''}`} />
-            Sincronizar TXT
-          </Button>
+          <div className="flex items-center gap-2">
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={handleVerify}
+              disabled={verifying || syncStatus?.active}
+              className="gap-2"
+            >
+              <CheckCircle2 className="h-4 w-4" />
+              Verificar TXT
+            </Button>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={onSyncTxt}
+              disabled={syncStatus?.active}
+              className="gap-2"
+            >
+              <RefreshCw className={`h-4 w-4 ${syncStatus?.active ? 'animate-spin' : ''}`} />
+              Sincronizar TXT
+            </Button>
+          </div>
         </div>
 
         {/* Sync Progress Banner */}
@@ -286,6 +324,92 @@ export function CorpusView({ corpus, onRemove, onSyncTxt, syncStatus, onDismissS
           </Table>
         )}
       </div>
+
+      {/* Verify Dialog */}
+      <Dialog open={verifyOpen} onOpenChange={setVerifyOpen}>
+        <DialogContent className="max-w-lg max-h-[80vh] overflow-auto">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              {verifyResult?.ok ? (
+                <CheckCircle2 className="h-5 w-5 text-emerald-500" />
+              ) : (
+                <X className="h-5 w-5 text-destructive" />
+              )}
+              Verificación del Corpus
+            </DialogTitle>
+            <DialogDescription>
+              {verifyResult?.ok
+                ? `Todo correcto: ${verifyResult.total_aprobados} aprobados en DB, ${verifyResult.total_txt} archivos .txt.`
+                : `Se encontraron ${(verifyResult?.missing.length ?? 0) + (verifyResult?.orphans.length ?? 0) + (verifyResult?.duplicates.length ?? 0)} problemas.`}
+            </DialogDescription>
+          </DialogHeader>
+
+          {verifyResult && (
+            <div className="space-y-4 mt-2">
+              {verifyResult.missing.length > 0 && (
+                <div>
+                  <p className="text-sm font-semibold text-amber-600 mb-1.5">
+                    Faltantes ({verifyResult.missing.length})
+                  </p>
+                  <div className="bg-amber-500/10 rounded-md p-2 max-h-32 overflow-auto">
+                    {verifyResult.missing.slice(0, 10).map((m) => (
+                      <p key={m.corpus_number} className="text-xs text-amber-700 font-mono">
+                        #{m.corpus_number} → {m.expected_file}
+                      </p>
+                    ))}
+                    {verifyResult.missing.length > 10 && (
+                      <p className="text-xs text-muted-foreground mt-1">
+                        ...y {verifyResult.missing.length - 10} más
+                      </p>
+                    )}
+                  </div>
+                </div>
+              )}
+
+              {verifyResult.duplicates.length > 0 && (
+                <div>
+                  <p className="text-sm font-semibold text-orange-600 mb-1.5">
+                    Duplicados ({verifyResult.duplicates.length})
+                  </p>
+                  <div className="bg-orange-500/10 rounded-md p-2 max-h-32 overflow-auto">
+                    {verifyResult.duplicates.map((d) => (
+                      <p key={d.file} className="text-xs text-orange-700 font-mono">
+                        {d.file} → esperado: {d.expected}
+                      </p>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {verifyResult.orphans.length > 0 && (
+                <div>
+                  <p className="text-sm font-semibold text-red-600 mb-1.5">
+                    Huérfanos ({verifyResult.orphans.length})
+                  </p>
+                  <div className="bg-red-500/10 rounded-md p-2 max-h-32 overflow-auto">
+                    {verifyResult.orphans.slice(0, 10).map((o) => (
+                      <p key={o} className="text-xs text-red-700 font-mono">{o}</p>
+                    ))}
+                    {verifyResult.orphans.length > 10 && (
+                      <p className="text-xs text-muted-foreground mt-1">
+                        ...y {verifyResult.orphans.length - 10} más
+                      </p>
+                    )}
+                  </div>
+                </div>
+              )}
+
+              {verifyResult.ok && (
+                <div className="flex items-center justify-center py-4">
+                  <p className="text-sm text-emerald-600 font-medium">
+                    No hay archivos faltantes, duplicados ni huérfanos.
+                  </p>
+                </div>
+              )}
+            </div>
+          )}
+        </DialogContent>
+      </Dialog>
     </div>
   )
 }

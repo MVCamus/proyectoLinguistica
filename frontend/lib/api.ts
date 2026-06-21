@@ -166,6 +166,21 @@ export async function fetchCorpusSyncStatus() {
   return res.json() as Promise<{ active: boolean; current: number; total: number; message: string; created: number; ok: number; deleted: number }>
 }
 
+export interface CorpusVerifyResult {
+  ok: boolean
+  total_aprobados: number
+  total_txt: number
+  missing: { corpus_number: number; expected_file: string; video_id: string }[]
+  orphans: string[]
+  duplicates: { file: string; expected: string }[]
+}
+
+export async function verifyCorpusTxt() {
+  const res = await fetch(`${API_BASE}/api/corpus/verify-txt`)
+  if (!res.ok) throw new Error('Error al verificar corpus')
+  return res.json() as Promise<CorpusVerifyResult>
+}
+
 export function getVideoFileUrl(videoId: string) {
   return `${API_BASE}/api/video-file/${videoId}`
 }

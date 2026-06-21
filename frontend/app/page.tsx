@@ -5,7 +5,7 @@ import { AppSidebar } from '@/components/app-sidebar'
 import { DiscoveryGrid } from '@/components/discovery-grid'
 import { CorpusView } from '@/components/corpus-view'
 import { NavigationView, Video, CorpusVideo } from '@/lib/types'
-import { fetchVideos, approveVideo, rejectVideo, deleteVideo, ingestarPool, fetchCorpusVideos, fetchProcessingQueue, cancelarCola, reintentarVideo, ProcessingItem, apiVideoToFrontend, fetchDriveSyncStatus, syncCorpusTxt, fetchCorpusSyncStatus } from '@/lib/api'
+import { fetchVideos, approveVideo, rejectVideo, deleteVideo, ingestarPool, fetchCorpusVideos, fetchProcessingQueue, cancelarCola, reintentarVideo, ProcessingItem, apiVideoToFrontend, fetchDriveSyncStatus, syncCorpusTxt, fetchCorpusSyncStatus, verifyCorpusTxt } from '@/lib/api'
 import { toast } from '@/hooks/use-toast'
 
 export default function Home() {
@@ -239,6 +239,10 @@ export default function Home() {
     setCorpusSyncStatus(null)
   }, [])
 
+  const handleVerifyCorpusTxt = useCallback(async () => {
+    return await verifyCorpusTxt()
+  }, [])
+
   return (
     <div className="flex h-screen bg-background">
       <AppSidebar
@@ -288,6 +292,7 @@ export default function Home() {
             onSyncTxt={handleSyncCorpusTxt}
             syncStatus={corpusSyncStatus}
             onDismissSync={dismissCorpusSync}
+            onVerifyTxt={handleVerifyCorpusTxt}
           />
         )}
       </main>
