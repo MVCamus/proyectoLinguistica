@@ -3,22 +3,18 @@
 import { FolderSearch, Library, Target } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { NavigationView } from '@/lib/types'
-import { Progress } from '@/components/ui/progress'
 
 interface AppSidebarProps {
   currentView: NavigationView
   onViewChange: (view: NavigationView) => void
-  totalTarget: number
-  currentProgress: number
+  corpusTotal: number
 }
 
 export function AppSidebar({
   currentView,
   onViewChange,
-  totalTarget,
-  currentProgress,
+  corpusTotal,
 }: AppSidebarProps) {
-  const progressPercent = (currentProgress / totalTarget) * 100
 
   return (
     <aside className="flex h-screen w-64 flex-col bg-sidebar border-r border-sidebar-border">
@@ -33,19 +29,13 @@ export function AppSidebar({
         </div>
       </div>
 
-      {/* Progress Section */}
+      {/* Videos Count */}
       <div className="px-4 py-5 border-b border-sidebar-border">
-        <div className="mb-3">
-          <p className="text-xs font-medium uppercase tracking-wider text-muted-foreground mb-1">
-            Project Goal
-          </p>
-          <p className="text-lg font-semibold text-sidebar-foreground">
-            {currentProgress} <span className="text-muted-foreground font-normal">/ {totalTarget}</span>
-          </p>
-        </div>
-        <Progress value={progressPercent} className="h-2" />
-        <p className="text-xs text-muted-foreground mt-2">
-          {progressPercent.toFixed(1)}% complete
+        <p className="text-xs font-medium uppercase tracking-wider text-muted-foreground mb-1">
+          Videos en Corpus
+        </p>
+        <p className="text-lg font-semibold text-sidebar-foreground">
+          {corpusTotal}
         </p>
       </div>
 

@@ -1,7 +1,7 @@
 'use client'
 
 import { useState, useMemo } from 'react'
-import { Search, Trash2 } from 'lucide-react'
+import { Search, Trash2, RefreshCw, X } from 'lucide-react'
 import { CorpusVideo } from '@/lib/types'
 import { Input } from '@/components/ui/input'
 import { Button } from '@/components/ui/button'
@@ -35,14 +35,16 @@ import {
 interface CorpusViewProps {
   corpus: CorpusVideo[]
   onRemove: (videoId: string) => void
+  onSyncTxt: () => void
+  syncStatus: { active: boolean; current: number; total: number; message: string; created: number; ok: number; deleted: number } | null
+  onDismissSync: () => void
 }
 
-export function CorpusView({ corpus, onRemove }: CorpusViewProps) {
+export function CorpusView({ corpus, onRemove, onSyncTxt, syncStatus, onDismissSync }: CorpusViewProps) {
   const [searchTerm, setSearchTerm] = useState('')
   const [sortOption, setSortOption] = useState('corpus_asc')
 
   const filteredCorpus = useMemo(() => {
-    // 1. Filtrar los videos según el término de búsqueda
     let result = [...corpus]
     if (searchTerm) {
       const lower = searchTerm.toLowerCase()
@@ -61,7 +63,6 @@ export function CorpusView({ corpus, onRemove }: CorpusViewProps) {
       }
     }
 
-    // 2. Ordenar según el criterio seleccionado
     result.sort((a, b) => {
       switch (sortOption) {
         case 'corpus_desc':
@@ -87,6 +88,10 @@ export function CorpusView({ corpus, onRemove }: CorpusViewProps) {
     return result
   }, [corpus, searchTerm, sortOption])
 
+  const percent = syncStatus && syncStatus.total > 0
+    ? Math.round((syncStatus.current / syncStatus.total) * 100)
+    : 0
+
   return (
     <div className="flex-1 flex flex-col overflow-hidden">
       {/* Header */}
@@ -98,7 +103,67 @@ export function CorpusView({ corpus, onRemove }: CorpusViewProps) {
               {corpus.length} videos aprobados
             </p>
           </div>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={onSyncTxt}
+            disabled={syncStatus?.active}
+            className="gap-2"
+          >
+            <RefreshCw className={`h-4 w-4 ${syncStatus?.active ? 'animate-spin' : ''}`} />
+            Sincronizar TXT
+          </Button>
         </div>
+
+        {/* Sync Progress Banner */}
+        {syncStatus?.active && (
+          <div className="mb-3 bg-emerald-500/10 border border-emerald-500/20 rounded-lg px-4 py-3 animate-in fade-in slide-in-from-top-2 duration-300">
+            <div className="flex items-center justify-between mb-1.5">
+              <span className="text-xs font-semibold text-emerald-600 truncate flex-1">
+                {syncStatus.message}
+              </span>
+              <div className="flex items-center gap-2 shrink-0 ml-3">
+                <span className="text-xs tabular-nums text-emerald-600 font-medium">
+                  {syncStatus.current} / {syncStatus.total} ({percent}%)
+                </span>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="h-6 w-6 p-0 text-emerald-600 hover:text-emerald-700"
+                  onClick={onDismissSync}
+                  disabled
+                >
+                  <X className="h-3.5 w-3.5" />
+                </Button>
+              </div>
+            </div>
+            <div className="w-full bg-emerald-500/20 rounded-full h-1.5 overflow-hidden">
+              <div
+                className="bg-emerald-500 h-1.5 rounded-full transition-all duration-300 ease-out"
+                style={{ width: `${percent}%` }}
+              />
+            </div>
+          </div>
+        )}
+
+        {/* Completed Sync Banner */}
+        {syncStatus && !syncStatus.active && (
+          <div className="mb-3 bg-blue-500/10 border border-blue-500/20 rounded-lg px-4 py-3 animate-in fade-in slide-in-from-top-2 duration-300">
+            <div className="flex items-center justify-between">
+              <span className="text-xs font-semibold text-blue-600 truncate flex-1">
+                {syncStatus.message}
+              </span>
+              <Button
+                variant="ghost"
+                size="sm"
+                className="h-6 w-6 p-0 text-blue-600 hover:text-blue-700 shrink-0 ml-3"
+                onClick={onDismissSync}
+              >
+                <X className="h-3.5 w-3.5" />
+              </Button>
+            </div>
+          </div>
+        )}
 
         {/* Search & Sort Dropdown */}
         <div className="flex gap-4">

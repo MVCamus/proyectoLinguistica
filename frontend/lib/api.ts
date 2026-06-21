@@ -154,6 +154,18 @@ export async function fetchCorpusVideos() {
   return fetchVideos('aprobado', 400, 0)
 }
 
+export async function syncCorpusTxt() {
+  const res = await fetch(`${API_BASE}/api/corpus/sync-txt`, { method: 'POST' })
+  if (!res.ok) throw new Error(`Error ${res.status} al sincronizar`)
+  return res.json()
+}
+
+export async function fetchCorpusSyncStatus() {
+  const res = await fetch(`${API_BASE}/api/corpus/sync-txt-status`)
+  if (!res.ok) throw new Error('Error al obtener estado de sincronizacion')
+  return res.json() as Promise<{ active: boolean; current: number; total: number; message: string; created: number; ok: number; deleted: number }>
+}
+
 export function getVideoFileUrl(videoId: string) {
   return `${API_BASE}/api/video-file/${videoId}`
 }

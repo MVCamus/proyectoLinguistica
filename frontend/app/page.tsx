@@ -5,7 +5,7 @@ import { AppSidebar } from '@/components/app-sidebar'
 import { DiscoveryGrid } from '@/components/discovery-grid'
 import { CorpusView } from '@/components/corpus-view'
 import { NavigationView, Video, CorpusVideo } from '@/lib/types'
-import { fetchVideos, approveVideo, rejectVideo, deleteVideo, ingestarPool, fetchCorpusVideos, fetchProcessingQueue, cancelarCola, reintentarVideo, ProcessingItem, apiVideoToFrontend, fetchDriveSyncStatus } from '@/lib/api'
+import { fetchVideos, approveVideo, rejectVideo, deleteVideo, ingestarPool, fetchCorpusVideos, fetchProcessingQueue, cancelarCola, reintentarVideo, ProcessingItem, apiVideoToFrontend, fetchDriveSyncStatus, syncCorpusTxt, fetchCorpusSyncStatus } from '@/lib/api'
 import { toast } from '@/hooks/use-toast'
 
 export default function Home() {
@@ -16,11 +16,10 @@ export default function Home() {
   const [loading, setLoading] = useState(true)
   const [corpusTotal, setCorpusTotal] = useState(0)
   const [driveSyncStatus, setDriveSyncStatus] = useState<{ active: boolean; current: number; total: number; message: string } | null>(null)
+  const [corpusSyncStatus, setCorpusSyncStatus] = useState<{ active: boolean; current: number; total: number; message: string; created: number; ok: number; deleted: number } | null>(null)
   const pollingRef = useRef<ReturnType<typeof setInterval>>()
   const failuresRef = useRef(0)
   const MAX_FAILURES = 10
-
-  const totalTarget = 400
 
   // Polling para el estado de sincronización de Drive en segundo plano
   useEffect(() => {
@@ -204,13 +203,48 @@ export default function Home() {
     }
   }, [loadDiscoveryVideos, loadProcessingQueue])
 
+  const handleSyncCorpusTxt = useCallback(async () => {
+    try {
+      await syncCorpusTxt()
+      setCorpusSyncStatus({ active: true, current: 0, total: 0, message: 'Iniciando...', created: 0, ok: 0, deleted: 0 })
+    } catch (err) {
+      console.error('Error al sincronizar:', err)
+      toast({ title: 'Error al sincronizar', description: String(err), variant: 'destructive' })
+    }
+  }, [])
+
+  const pollingCorpusSyncRef = useRef<ReturnType<typeof setInterval>>()
+
+  useEffect(() => {
+    if (corpusSyncStatus?.active) {
+      const interval = setInterval(async () => {
+        try {
+          const status = await fetchCorpusSyncStatus()
+          setCorpusSyncStatus(status)
+          if (!status.active) {
+            clearInterval(interval)
+            pollingCorpusSyncRef.current = undefined
+            loadCorpus()
+          }
+        } catch (err) {
+          console.error('Error al obtener estado de sincronizacion:', err)
+        }
+      }, 500)
+      pollingCorpusSyncRef.current = interval
+      return () => clearInterval(interval)
+    }
+  }, [corpusSyncStatus?.active, loadCorpus])
+
+  const dismissCorpusSync = useCallback(() => {
+    setCorpusSyncStatus(null)
+  }, [])
+
   return (
     <div className="flex h-screen bg-background">
       <AppSidebar
         currentView={currentView}
         onViewChange={setCurrentView}
-        totalTarget={totalTarget}
-        currentProgress={corpusTotal}
+        corpusTotal={corpusTotal}
       />
 
       <main className="flex-1 flex flex-col overflow-hidden">
@@ -251,6 +285,9 @@ export default function Home() {
           <CorpusView
             corpus={corpus}
             onRemove={handleRemoveFromCorpus}
+            onSyncTxt={handleSyncCorpusTxt}
+            syncStatus={corpusSyncStatus}
+            onDismissSync={dismissCorpusSync}
           />
         )}
       </main>

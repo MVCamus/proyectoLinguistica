@@ -542,6 +542,137 @@ async def reintentar_video(
     return MensajeResponse(mensaje="Video reencolado para transcripcion")
 
 
+_corpus_sync_progress = {
+    "active": False,
+    "current": 0,
+    "total": 0,
+    "message": "",
+    "created": 0,
+    "ok": 0,
+    "deleted": 0,
+}
+
+
+@router.get("/corpus/sync-txt-status")
+async def obtener_estado_corpus_sync():
+    return _corpus_sync_progress
+
+
+def _parse_corpus_number(filename: str) -> int | None:
+    try:
+        return int(filename[:3])
+    except (ValueError, IndexError):
+        return None
+
+
+async def _sync_corpus_txt_files():
+    global _corpus_sync_progress
+    _corpus_sync_progress["active"] = True
+    _corpus_sync_progress["current"] = 0
+    _corpus_sync_progress["created"] = 0
+    _corpus_sync_progress["ok"] = 0
+    _corpus_sync_progress["deleted"] = 0
+    _corpus_sync_progress["message"] = "Iniciando sincronizacion de archivos .txt..."
+
+    loop = asyncio.get_event_loop()
+    corpus_dir = Path("corpus")
+    corpus_dir.mkdir(exist_ok=True)
+
+    async with async_session() as session:
+        result = await session.execute(
+            select(Video)
+            .where(Video.status == "aprobado")
+            .order_by(Video.corpus_number)
+        )
+        aprobados = result.scalars().all()
+
+        # Construir set de nombres esperados y mapeo numero -> nombre esperado
+        expected_files: set[str] = set()
+        expected_by_number: dict[int, str] = {}
+
+        for v in aprobados:
+            if not v.corpus_number:
+                continue
+            username_clean = (v.username or "@desconocido").lstrip("@").replace(" ", "_")[:30]
+            txt_name = f"{v.corpus_number:03d}_{username_clean}.txt"
+            expected_files.add(txt_name)
+            expected_by_number[v.corpus_number] = txt_name
+
+        _corpus_sync_progress["total"] = len(aprobados) + len(list(corpus_dir.glob("*.txt")))
+
+        # Fase 1: crear .txt faltantes para cada video aprobado
+        for v in aprobados:
+            if not v.corpus_number or not v.transcript_editada:
+                _corpus_sync_progress["current"] += 1
+                _corpus_sync_progress["ok"] += 1
+                continue
+
+            username_clean = (v.username or "@desconocido").lstrip("@").replace(" ", "_")[:30]
+            txt_name = f"{v.corpus_number:03d}_{username_clean}.txt"
+            txt_path = corpus_dir / txt_name
+
+            if txt_path.exists():
+                _corpus_sync_progress["current"] += 1
+                _corpus_sync_progress["ok"] += 1
+                continue
+
+            _corpus_sync_progress["message"] = f"Creando {txt_name}..."
+
+            def _escribir_txt(path, transcript):
+                with open(path, "w", encoding="utf-8") as f:
+                    for seg in transcript:
+                        text = seg.get("text", "") if isinstance(seg, dict) else ""
+                        if text:
+                            f.write(f"{text}\n")
+
+            await loop.run_in_executor(None, _escribir_txt, txt_path, v.transcript_editada)
+            _corpus_sync_progress["current"] += 1
+            _corpus_sync_progress["created"] += 1
+            logger.info("Creado %s", txt_name)
+
+        # Fase 2: limpiar archivos huerfanos o duplicados
+        all_txt = sorted(corpus_dir.glob("*.txt"))
+        for txt_path in all_txt:
+            fname = txt_path.name
+            if fname in expected_files:
+                continue
+
+            parsed_num = _parse_corpus_number(fname)
+            deleted = False
+
+            if parsed_num is not None and parsed_num in expected_by_number:
+                # Duplicado: mismo numero pero distinto username -> renombramiento viejo
+                _corpus_sync_progress["message"] = f"Eliminando duplicado {fname}..."
+                await loop.run_in_executor(None, txt_path.unlink, True)
+                deleted = True
+                logger.info("Eliminado duplicado %s (esperado: %s)", fname, expected_by_number[parsed_num])
+            elif parsed_num is not None and parsed_num not in expected_by_number:
+                # Huerfano: el video con ese numero ya no esta aprobado
+                _corpus_sync_progress["message"] = f"Eliminando huerfano {fname}..."
+                await loop.run_in_executor(None, txt_path.unlink, True)
+                deleted = True
+                logger.info("Eliminado huerfano %s", fname)
+
+            if deleted:
+                _corpus_sync_progress["deleted"] += 1
+            _corpus_sync_progress["current"] += 1
+
+    _corpus_sync_progress["active"] = False
+    parts = [f"{_corpus_sync_progress['created']} creados", f"{_corpus_sync_progress['ok']} ya existian"]
+    if _corpus_sync_progress["deleted"]:
+        parts.append(f"{_corpus_sync_progress['deleted']} eliminados")
+    _corpus_sync_progress["message"] = f"Sincronizacion completada. {', '.join(parts)}."
+
+
+@router.post("/corpus/sync-txt", response_model=MensajeResponse)
+async def sincronizar_corpus_txt():
+    global _corpus_sync_progress
+    if _corpus_sync_progress["active"]:
+        raise HTTPException(status_code=400, detail="Ya hay una sincronizacion en curso")
+    _background(asyncio.create_task(_sync_corpus_txt_files()))
+    return MensajeResponse(mensaje="Sincronizacion de archivos .txt iniciada en segundo plano")
+
+
 @router.post("/videos/{video_id}/cancelar-cola", response_model=MensajeResponse)
 async def cancelar_de_cola(
     video_id: str,

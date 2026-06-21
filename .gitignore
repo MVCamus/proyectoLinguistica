@@ -20,7 +20,7 @@ __pycache__/
 tmp/
 logs/
 *.bak
-
+corpus/
 # Frontend
 node_modules
 .next/
