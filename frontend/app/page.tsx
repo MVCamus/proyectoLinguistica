@@ -5,7 +5,7 @@ import { AppSidebar } from '@/components/app-sidebar'
 import { DiscoveryGrid } from '@/components/discovery-grid'
 import { CorpusView } from '@/components/corpus-view'
 import { NavigationView, Video, CorpusVideo } from '@/lib/types'
-import { fetchVideos, approveVideo, rejectVideo, deleteVideo, ingestarPool, fetchCorpusVideos, fetchProcessingQueue, cancelarCola, reintentarVideo, ProcessingItem, apiVideoToFrontend, fetchDriveSyncStatus, syncCorpusTxt, fetchCorpusSyncStatus, verifyCorpusTxt } from '@/lib/api'
+import { fetchVideos, approveVideo, rejectVideo, deleteVideo, ingestarPool, fetchCorpusVideos, fetchProcessingQueue, cancelarCola, reintentarVideo, ProcessingItem, apiVideoToFrontend, fetchDriveSyncStatus, syncCorpusTxt, fetchCorpusSyncStatus, verifyCorpusTxt, fixCorpusNumbering, fetchFixNumberingStatus, syncDrive, fetchSyncDriveStatus } from '@/lib/api'
 import { toast } from '@/hooks/use-toast'
 
 export default function Home() {
@@ -17,6 +17,8 @@ export default function Home() {
   const [corpusTotal, setCorpusTotal] = useState(0)
   const [driveSyncStatus, setDriveSyncStatus] = useState<{ active: boolean; current: number; total: number; message: string } | null>(null)
   const [corpusSyncStatus, setCorpusSyncStatus] = useState<{ active: boolean; current: number; total: number; message: string; created: number; ok: number; deleted: number } | null>(null)
+  const [fixNumberingStatus, setFixNumberingStatus] = useState<{ active: boolean; current: number; total: number; message: string; renumbered: number; deleted_drive: number } | null>(null)
+  const [syncDriveStatus, setSyncDriveStatus] = useState<{ active: boolean; current: number; total: number; message: string; renamed: number; deleted: number; moved: number } | null>(null)
   const pollingRef = useRef<ReturnType<typeof setInterval>>()
   const failuresRef = useRef(0)
   const MAX_FAILURES = 10
@@ -243,6 +245,68 @@ export default function Home() {
     return await verifyCorpusTxt()
   }, [])
 
+  const handleFixNumbering = useCallback(async () => {
+    try {
+      await fixCorpusNumbering()
+      setFixNumberingStatus({ active: true, current: 0, total: 0, message: 'Iniciando...', renumbered: 0, deleted_drive: 0 })
+    } catch (err) {
+      console.error('Error al corregir numeracion:', err)
+      toast({ title: 'Error al corregir numeracion', description: String(err), variant: 'destructive' })
+    }
+  }, [])
+
+  const dismissFixNumbering = useCallback(() => {
+    setFixNumberingStatus(null)
+  }, [])
+
+  useEffect(() => {
+    if (fixNumberingStatus?.active) {
+      const interval = setInterval(async () => {
+        try {
+          const status = await fetchFixNumberingStatus()
+          setFixNumberingStatus(status)
+          if (!status.active) {
+            clearInterval(interval)
+            loadCorpus()
+          }
+        } catch {
+        }
+      }, 500)
+      return () => clearInterval(interval)
+    }
+  }, [fixNumberingStatus?.active, loadCorpus])
+
+  const handleSyncDrive = useCallback(async () => {
+    try {
+      await syncDrive()
+      setSyncDriveStatus({ active: true, current: 0, total: 0, message: 'Iniciando...', renamed: 0, deleted: 0, moved: 0 })
+    } catch (err) {
+      console.error('Error al sincronizar Drive:', err)
+      toast({ title: 'Error al sincronizar Drive', description: String(err), variant: 'destructive' })
+    }
+  }, [])
+
+  const dismissSyncDrive = useCallback(() => {
+    setSyncDriveStatus(null)
+  }, [])
+
+  useEffect(() => {
+    if (syncDriveStatus?.active) {
+      const interval = setInterval(async () => {
+        try {
+          const status = await fetchSyncDriveStatus()
+          setSyncDriveStatus(status)
+          if (!status.active) {
+            clearInterval(interval)
+            loadCorpus()
+          }
+        } catch {
+        }
+      }, 500)
+      return () => clearInterval(interval)
+    }
+  }, [syncDriveStatus?.active, loadCorpus])
+
   return (
     <div className="flex h-screen bg-background">
       <AppSidebar
@@ -293,6 +357,12 @@ export default function Home() {
             syncStatus={corpusSyncStatus}
             onDismissSync={dismissCorpusSync}
             onVerifyTxt={handleVerifyCorpusTxt}
+            onFixNumbering={handleFixNumbering}
+            fixNumberingStatus={fixNumberingStatus}
+            onDismissFixNumbering={dismissFixNumbering}
+            onSyncDrive={handleSyncDrive}
+            syncDriveStatus={syncDriveStatus}
+            onDismissSyncDrive={dismissSyncDrive}
           />
         )}
       </main>

@@ -1,7 +1,7 @@
 'use client'
 
 import { useState, useMemo } from 'react'
-import { Search, Trash2, RefreshCw, X, CheckCircle2 } from 'lucide-react'
+import { Search, Trash2, RefreshCw, X, CheckCircle2, ArrowLeftRight } from 'lucide-react'
 import { CorpusVideo } from '@/lib/types'
 import { CorpusVerifyResult } from '@/lib/api'
 import { Input } from '@/components/ui/input'
@@ -47,9 +47,15 @@ interface CorpusViewProps {
   syncStatus: { active: boolean; current: number; total: number; message: string; created: number; ok: number; deleted: number } | null
   onDismissSync: () => void
   onVerifyTxt: () => Promise<CorpusVerifyResult>
+  onFixNumbering: () => void
+  fixNumberingStatus: { active: boolean; current: number; total: number; message: string; renumbered: number; deleted_drive: number } | null
+  onDismissFixNumbering: () => void
+  onSyncDrive: () => void
+  syncDriveStatus: { active: boolean; current: number; total: number; message: string; renamed: number; deleted: number; moved: number } | null
+  onDismissSyncDrive: () => void
 }
 
-export function CorpusView({ corpus, onRemove, onSyncTxt, syncStatus, onDismissSync, onVerifyTxt }: CorpusViewProps) {
+export function CorpusView({ corpus, onRemove, onSyncTxt, syncStatus, onDismissSync, onVerifyTxt, onFixNumbering, fixNumberingStatus, onDismissFixNumbering, onSyncDrive, syncDriveStatus, onDismissSyncDrive }: CorpusViewProps) {
   const [searchTerm, setSearchTerm] = useState('')
   const [sortOption, setSortOption] = useState('corpus_asc')
   const [verifyResult, setVerifyResult] = useState<CorpusVerifyResult | null>(null)
@@ -104,6 +110,14 @@ export function CorpusView({ corpus, onRemove, onSyncTxt, syncStatus, onDismissS
     ? Math.round((syncStatus.current / syncStatus.total) * 100)
     : 0
 
+  const percentFix = fixNumberingStatus && fixNumberingStatus.total > 0
+    ? Math.round((fixNumberingStatus.current / fixNumberingStatus.total) * 100)
+    : 0
+
+  const percentDrive = syncDriveStatus && syncDriveStatus.total > 0
+    ? Math.round((syncDriveStatus.current / syncDriveStatus.total) * 100)
+    : 0
+
   const handleVerify = async () => {
     setVerifying(true)
     try {
@@ -149,6 +163,26 @@ export function CorpusView({ corpus, onRemove, onSyncTxt, syncStatus, onDismissS
             >
               <RefreshCw className={`h-4 w-4 ${syncStatus?.active ? 'animate-spin' : ''}`} />
               Sincronizar TXT
+            </Button>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={onFixNumbering}
+              disabled={fixNumberingStatus?.active || syncStatus?.active}
+              className="gap-2"
+            >
+              <ArrowLeftRight className={`h-4 w-4 ${fixNumberingStatus?.active ? 'animate-spin' : ''}`} />
+              Corregir Numeración
+            </Button>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={onSyncDrive}
+              disabled={syncDriveStatus?.active || syncStatus?.active}
+              className="gap-2"
+            >
+              <RefreshCw className={`h-4 w-4 ${syncDriveStatus?.active ? 'animate-spin' : ''}`} />
+              Sincronizar Drive
             </Button>
           </div>
         </div>
@@ -196,6 +230,106 @@ export function CorpusView({ corpus, onRemove, onSyncTxt, syncStatus, onDismissS
                 size="sm"
                 className="h-6 w-6 p-0 text-blue-600 hover:text-blue-700 shrink-0 ml-3"
                 onClick={onDismissSync}
+              >
+                <X className="h-3.5 w-3.5" />
+              </Button>
+            </div>
+          </div>
+        )}
+
+        {/* Fix Numbering Progress Banner */}
+        {fixNumberingStatus?.active && (
+          <div className="mb-3 bg-violet-500/10 border border-violet-500/20 rounded-lg px-4 py-3 animate-in fade-in slide-in-from-top-2 duration-300">
+            <div className="flex items-center justify-between mb-1.5">
+              <span className="text-xs font-semibold text-violet-600 truncate flex-1">
+                {fixNumberingStatus.message}
+              </span>
+              <div className="flex items-center gap-2 shrink-0 ml-3">
+                <span className="text-xs tabular-nums text-violet-600 font-medium">
+                  {fixNumberingStatus.current} / {fixNumberingStatus.total} ({percentFix}%)
+                </span>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="h-6 w-6 p-0 text-violet-600 hover:text-violet-700"
+                  onClick={onDismissFixNumbering}
+                  disabled
+                >
+                  <X className="h-3.5 w-3.5" />
+                </Button>
+              </div>
+            </div>
+            <div className="w-full bg-violet-500/20 rounded-full h-1.5 overflow-hidden">
+              <div
+                className="bg-violet-500 h-1.5 rounded-full transition-all duration-300 ease-out"
+                style={{ width: `${percentFix}%` }}
+              />
+            </div>
+          </div>
+        )}
+
+        {/* Completed Fix Numbering Banner */}
+        {fixNumberingStatus && !fixNumberingStatus.active && (
+          <div className="mb-3 bg-blue-500/10 border border-blue-500/20 rounded-lg px-4 py-3 animate-in fade-in slide-in-from-top-2 duration-300">
+            <div className="flex items-center justify-between">
+              <span className="text-xs font-semibold text-blue-600 truncate flex-1">
+                {fixNumberingStatus.message}
+              </span>
+              <Button
+                variant="ghost"
+                size="sm"
+                className="h-6 w-6 p-0 text-blue-600 hover:text-blue-700 shrink-0 ml-3"
+                onClick={onDismissFixNumbering}
+              >
+                <X className="h-3.5 w-3.5" />
+              </Button>
+            </div>
+          </div>
+        )}
+
+        {/* Sync Drive Progress Banner */}
+        {syncDriveStatus?.active && (
+          <div className="mb-3 bg-violet-500/10 border border-violet-500/20 rounded-lg px-4 py-3 animate-in fade-in slide-in-from-top-2 duration-300">
+            <div className="flex items-center justify-between mb-1.5">
+              <span className="text-xs font-semibold text-violet-600 truncate flex-1">
+                {syncDriveStatus.message}
+              </span>
+              <div className="flex items-center gap-2 shrink-0 ml-3">
+                <span className="text-xs tabular-nums text-violet-600 font-medium">
+                  {syncDriveStatus.current} / {syncDriveStatus.total} ({percentDrive}%)
+                </span>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="h-6 w-6 p-0 text-violet-600 hover:text-violet-700"
+                  onClick={onDismissSyncDrive}
+                  disabled
+                >
+                  <X className="h-3.5 w-3.5" />
+                </Button>
+              </div>
+            </div>
+            <div className="w-full bg-violet-500/20 rounded-full h-1.5 overflow-hidden">
+              <div
+                className="bg-violet-500 h-1.5 rounded-full transition-all duration-300 ease-out"
+                style={{ width: `${percentDrive}%` }}
+              />
+            </div>
+          </div>
+        )}
+
+        {/* Completed Sync Drive Banner */}
+        {syncDriveStatus && !syncDriveStatus.active && (
+          <div className="mb-3 bg-blue-500/10 border border-blue-500/20 rounded-lg px-4 py-3 animate-in fade-in slide-in-from-top-2 duration-300">
+            <div className="flex items-center justify-between">
+              <span className="text-xs font-semibold text-blue-600 truncate flex-1">
+                {syncDriveStatus.message}
+              </span>
+              <Button
+                variant="ghost"
+                size="sm"
+                className="h-6 w-6 p-0 text-blue-600 hover:text-blue-700 shrink-0 ml-3"
+                onClick={onDismissSyncDrive}
               >
                 <X className="h-3.5 w-3.5" />
               </Button>

@@ -181,6 +181,30 @@ export async function verifyCorpusTxt() {
   return res.json() as Promise<CorpusVerifyResult>
 }
 
+export async function fixCorpusNumbering() {
+  const res = await fetch(`${API_BASE}/api/corpus/fix-numbering`, { method: 'POST' })
+  if (!res.ok) throw new Error(`Error ${res.status} al corregir numeracion`)
+  return res.json()
+}
+
+export async function fetchFixNumberingStatus() {
+  const res = await fetch(`${API_BASE}/api/corpus/fix-numbering-status`)
+  if (!res.ok) throw new Error('Error al obtener estado de correccion')
+  return res.json() as Promise<{ active: boolean; current: number; total: number; message: string; renumbered: number; deleted_drive: number }>
+}
+
+export async function syncDrive() {
+  const res = await fetch(`${API_BASE}/api/corpus/sync-drive`, { method: 'POST' })
+  if (!res.ok) throw new Error(`Error ${res.status} al sincronizar Drive`)
+  return res.json()
+}
+
+export async function fetchSyncDriveStatus() {
+  const res = await fetch(`${API_BASE}/api/corpus/sync-drive-status`)
+  if (!res.ok) throw new Error('Error al obtener estado de sincronizacion de Drive')
+  return res.json() as Promise<{ active: boolean; current: number; total: number; message: string; renamed: number; deleted: number; moved: number }>
+}
+
 export function getVideoFileUrl(videoId: string) {
   return `${API_BASE}/api/video-file/${videoId}`
 }

@@ -1,4 +1,5 @@
 import logging
+import re
 from pathlib import Path
 
 from google.auth.transport.requests import Request
@@ -263,6 +264,85 @@ def _obtener_carpeta_grupo_por_nombre(service, corpus_number: int, root_folder_i
     )
     items = results.get("files", [])
     return items[0]["id"] if items else None
+
+
+def mover_carpeta_a_grupo(folder_id: str, new_corpus_number: int, root_folder_id: str) -> bool:
+    """Mueve una carpeta de video al grupo correcto segun new_corpus_number."""
+    import re
+    try:
+        service = _get_service()
+        folder = service.files().get(fileId=folder_id, fields="parents").execute()
+        current_parents = folder.get("parents", [])
+
+        target_group = _group_folder_name(new_corpus_number)
+
+        # Buscar carpeta grupo destino por nombre debajo de root
+        group_id = _obtener_carpeta_grupo_por_nombre(service, new_corpus_number, root_folder_id)
+        if not group_id:
+            group_id = _crear_subcarpeta(service, target_group, root_folder_id)
+
+        if group_id in current_parents:
+            return True
+
+        # Remover de todos los parents actuales y agregar al nuevo
+        for parent_id in current_parents:
+            if parent_id != group_id:
+                service.files().update(fileId=folder_id, removeParents=parent_id).execute()
+
+        service.files().update(fileId=folder_id, addParents=group_id).execute()
+        logger.info("Carpeta %s movida al grupo %s", folder_id, target_group)
+        return True
+    except Exception as e:
+        logger.warning("Error moviendo carpeta %s al grupo %s: %s", folder_id, _group_folder_name(new_corpus_number), e)
+        return False
+
+
+def listar_carpetas_video_en_drive(parent_folder_id: str) -> list[dict]:
+    """Retorna [{id, name}] de todas las carpetas NNN_* en Drive, buscando dentro de las carpetas grupo."""
+    import re
+    service = _get_service()
+    folders = []
+
+    # Listar carpetas grupo (e.g. "videos 1 - 100", "videos 101 - 200")
+    page_token = None
+    while True:
+        results = (
+            service.files()
+            .list(
+                q=f"'{parent_folder_id}' in parents and mimeType='application/vnd.google-apps.folder' and trashed=false",
+                fields="nextPageToken, files(id, name)",
+                pageSize=100,
+                pageToken=page_token,
+            )
+            .execute()
+        )
+        for gf in results.get("files", []):
+            if not re.match(r"^videos \d+ - \d+$", gf["name"]):
+                continue
+            # Listar subcarpetas dentro de cada carpeta grupo
+            sub_token = None
+            while True:
+                sub = (
+                    service.files()
+                    .list(
+                        q=f"'{gf['id']}' in parents and mimeType='application/vnd.google-apps.folder' and trashed=false",
+                        fields="nextPageToken, files(id, name)",
+                        pageSize=100,
+                        pageToken=sub_token,
+                    )
+                    .execute()
+                )
+                for vf in sub.get("files", []):
+                    if re.match(r"^\d{3}_", vf["name"]):
+                        folders.append(vf)
+                sub_token = sub.get("nextPageToken")
+                if not sub_token:
+                    break
+        page_token = results.get("nextPageToken")
+        if not page_token:
+            break
+
+    return folders
 
 
 def eliminar_carpeta_video(video_id: str, parent_folder_id: str, folder_name: str | None = None) -> bool:

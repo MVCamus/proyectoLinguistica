@@ -25,7 +25,7 @@ from app.schemas import (
 )
 from app.worker import avanzar_ventana_transcripcion, subir_a_drive
 from app.services.discovery import parse_tiktok_urls
-from app.services.drive import eliminar_carpeta_video, obtener_carpeta_grupo, renombrar_carpeta
+from app.services.drive import eliminar_carpeta_video, listar_carpetas_video_en_drive, mover_carpeta_a_grupo, obtener_carpeta_grupo, renombrar_carpeta
 from app.config import settings as s
 
 logger = logging.getLogger("maite.api")
@@ -726,6 +726,430 @@ async def verificar_corpus_txt(db: AsyncSession = Depends(get_db)):
         "orphans": orphans,
         "duplicates": duplicates,
     }
+
+_corpus_fix_progress = {
+    "active": False,
+    "current": 0,
+    "total": 0,
+    "message": "",
+    "renumbered": 0,
+    "deleted_drive": 0,
+}
+
+
+@router.get("/corpus/fix-numbering-status")
+async def obtener_estado_fix_numbering():
+    return _corpus_fix_progress
+
+
+async def _fix_corpus_numbering():
+    global _corpus_fix_progress
+    _corpus_fix_progress["active"] = True
+    _corpus_fix_progress["current"] = 0
+    _corpus_fix_progress["renumbered"] = 0
+    _corpus_fix_progress["deleted_drive"] = 0
+    _corpus_fix_progress["message"] = "Iniciando correccion de numeracion..."
+
+    loop = asyncio.get_event_loop()
+    corpus_dir = Path("corpus")
+    corpus_dir.mkdir(exist_ok=True)
+    has_drive = bool(s.google_drive_folder_id)
+    DRIVE_TIMEOUT = 45
+
+    await asyncio.sleep(0)
+
+    async with async_session() as session:
+        result = await session.execute(
+            select(Video)
+            .where(Video.status == "aprobado")
+            .order_by(Video.corpus_number)
+        )
+        videos = result.scalars().all()
+
+        renumbering: list[tuple[Video, int, int]] = []
+        expected = 1
+        for v in videos:
+            if not v.corpus_number:
+                continue
+            if v.corpus_number != expected:
+                renumbering.append((v, v.corpus_number, expected))
+            expected += 1
+
+        # Listar carpetas en Drive primero para calcular total correcto
+        drive_folders: list[dict] = []
+        if has_drive:
+            _corpus_fix_progress["message"] = "Listando carpetas en Drive..."
+            await asyncio.sleep(0)
+            try:
+                drive_folders = await asyncio.wait_for(
+                    loop.run_in_executor(None, listar_carpetas_video_en_drive, s.google_drive_folder_id),
+                    timeout=DRIVE_TIMEOUT * 2,
+                )
+            except asyncio.TimeoutError:
+                logger.error("Timeout al listar carpetas en Drive")
+                drive_folders = []
+            except Exception as e:
+                logger.error("Error al listar carpetas en Drive: %s", e)
+                drive_folders = []
+
+        total = len(renumbering) + len(drive_folders)
+        _corpus_fix_progress["total"] = max(1, total)
+
+        # Paso 1: Renumerar DB + renombrar archivos locales
+        if renumbering:
+            _corpus_fix_progress["message"] = "Renumerando videos en la base de datos..."
+            for v, old_num, new_num in renumbering:
+                v.corpus_number = new_num
+            await session.commit()
+            _corpus_fix_progress["renumbered"] = len(renumbering)
+            _corpus_fix_progress["current"] = len(renumbering)
+            logger.info("Renumerados %d videos en DB", len(renumbering))
+            await asyncio.sleep(0)
+
+            _corpus_fix_progress["message"] = "Renombrando archivos .txt locales..."
+            for v, old_num, new_num in renumbering:
+                username_clean = (v.username or "@desconocido").lstrip("@").replace(" ", "_")[:30]
+                old_name = f"{old_num:03d}_{username_clean}.txt"
+                new_name = f"{new_num:03d}_{username_clean}.txt"
+                old_path = corpus_dir / old_name
+                new_path = corpus_dir / new_name
+                if old_path.exists():
+                    await loop.run_in_executor(None, old_path.rename, new_path)
+                    logger.info("Renombrado %s -> %s", old_name, new_name)
+                _corpus_fix_progress["message"] = f"Renombrado {old_name} -> {new_name}..."
+
+        # Paso 2: Sincronizar Drive
+        if has_drive and drive_folders:
+            _corpus_fix_progress["message"] = "Sincronizando carpetas en Drive..."
+
+            result = await session.execute(
+                select(Video)
+                .where(Video.status == "aprobado")
+                .order_by(Video.corpus_number)
+            )
+            videos_updated = result.scalars().all()
+
+            expected_names: set[str] = set()
+            for v in videos_updated:
+                if not v.corpus_number:
+                    continue
+                username_clean = (v.username or "@desconocido").lstrip("@").replace(" ", "_")[:30]
+                expected_names.add(f"{v.corpus_number:03d}_{username_clean}")
+
+            # A: Renombrar carpetas de videos renumerados
+            for v, old_num, new_num in renumbering:
+                username_clean = (v.username or "@desconocido").lstrip("@").replace(" ", "_")[:30]
+                old_label = f"{old_num:03d}_{username_clean}"
+                new_label = f"{new_num:03d}_{username_clean}"
+                _corpus_fix_progress["message"] = f"Renombrando carpeta {old_label} -> {new_label} en Drive..."
+                await asyncio.sleep(0)
+                try:
+                    await asyncio.wait_for(
+                        loop.run_in_executor(
+                            None, renombrar_carpeta, v.id, s.google_drive_folder_id, old_label, new_label
+                        ),
+                        timeout=DRIVE_TIMEOUT,
+                    )
+                    logger.info("Carpeta renombrada: %s -> %s", old_label, new_label)
+                except asyncio.TimeoutError:
+                    logger.warning("Timeout renombrando %s en Drive", old_label)
+                except Exception as e:
+                    logger.warning("Error renombrando %s en Drive: %s", old_label, e)
+
+            # B: Re-listar drive folders (estado fresco despues de renames)
+            if renumbering:
+                await asyncio.sleep(0)
+                try:
+                    drive_folders = await asyncio.wait_for(
+                        loop.run_in_executor(None, listar_carpetas_video_en_drive, s.google_drive_folder_id),
+                        timeout=DRIVE_TIMEOUT * 2,
+                    )
+                except (asyncio.TimeoutError, Exception) as e:
+                    logger.warning("Error al re-listar Drive: %s", e)
+
+            # C: Agrupar por nombre, desduplicar, mover a grupo correcto, eliminar huerfanos
+            by_name: dict[str, list[dict]] = {}
+            for f in drive_folders:
+                by_name.setdefault(f["name"], []).append(f)
+
+            for name, folders in by_name.items():
+                _corpus_fix_progress["message"] = f"Procesando carpeta {name} en Drive..."
+                current_val = _corpus_fix_progress["current"]
+
+                if name in expected_names:
+                    # Desduplicar: mantener la primera, eliminar las demas
+                    for dup in folders[1:]:
+                        try:
+                            ok = await asyncio.wait_for(
+                                loop.run_in_executor(
+                                    None, eliminar_carpeta_video, "", s.google_drive_folder_id, dup["name"]
+                                ),
+                                timeout=DRIVE_TIMEOUT,
+                            )
+                            if ok:
+                                _corpus_fix_progress["deleted_drive"] += 1
+                                logger.info("Duplicado eliminado de Drive: %s", dup["name"])
+                        except asyncio.TimeoutError:
+                            logger.warning("Timeout eliminando duplicado %s", dup["name"])
+                        except Exception as e:
+                            logger.warning("Error eliminando duplicado %s: %s", dup["name"], e)
+
+                    # Mover al grupo correcto segun su numero
+                    corpus_num = int(name[:3])
+                    try:
+                        await asyncio.wait_for(
+                            loop.run_in_executor(
+                                None, mover_carpeta_a_grupo, folders[0]["id"], corpus_num, s.google_drive_folder_id
+                            ),
+                            timeout=DRIVE_TIMEOUT,
+                        )
+                    except asyncio.TimeoutError:
+                        logger.warning("Timeout moviendo %s al grupo", name)
+                    except Exception as e:
+                        logger.warning("Error moviendo %s al grupo: %s", name, e)
+                else:
+                    # Huerfana o renombre viejo: eliminar todas las copias
+                    for f in folders:
+                        try:
+                            ok = await asyncio.wait_for(
+                                loop.run_in_executor(
+                                    None, eliminar_carpeta_video, "", s.google_drive_folder_id, f["name"]
+                                ),
+                                timeout=DRIVE_TIMEOUT,
+                            )
+                            if ok:
+                                _corpus_fix_progress["deleted_drive"] += 1
+                                logger.info("Huerfana eliminada de Drive: %s", f["name"])
+                        except asyncio.TimeoutError:
+                            logger.warning("Timeout eliminando huerfana %s", f["name"])
+                        except Exception as e:
+                            logger.warning("Error eliminando huerfana %s: %s", f["name"], e)
+
+                _corpus_fix_progress["current"] = current_val + 1
+
+    parts = [f"{_corpus_fix_progress['renumbered']} videos renumerados"]
+    if _corpus_fix_progress["deleted_drive"]:
+        parts.append(f"{_corpus_fix_progress['deleted_drive']} carpetas eliminadas de Drive")
+    _corpus_fix_progress["active"] = False
+    _corpus_fix_progress["message"] = f"Correccion completada. {', '.join(parts)}."
+
+
+@router.post("/corpus/fix-numbering", response_model=MensajeResponse)
+async def fix_corpus_numbering():
+    global _corpus_fix_progress
+    if _corpus_fix_progress["active"]:
+        raise HTTPException(status_code=400, detail="Ya hay una correccion en curso")
+    _background(asyncio.create_task(_fix_corpus_numbering()))
+    return MensajeResponse(mensaje="Correccion de numeracion iniciada en segundo plano")
+
+
+_drive_sync_progress_ded = {
+    "active": False,
+    "current": 0,
+    "total": 0,
+    "message": "",
+    "renamed": 0,
+    "deleted": 0,
+    "moved": 0,
+}
+
+
+@router.get("/corpus/sync-drive-status")
+async def obtener_estado_sync_drive():
+    return _drive_sync_progress_ded
+
+
+async def _sync_drive_folders():
+    global _drive_sync_progress_ded
+    _drive_sync_progress_ded["active"] = True
+    _drive_sync_progress_ded["current"] = 0
+    _drive_sync_progress_ded["renamed"] = 0
+    _drive_sync_progress_ded["deleted"] = 0
+    _drive_sync_progress_ded["moved"] = 0
+    _drive_sync_progress_ded["message"] = "Iniciando sincronizacion de Drive..."
+
+    loop = asyncio.get_event_loop()
+    has_drive = bool(s.google_drive_folder_id)
+    DRIVE_TIMEOUT = 45
+
+    if not has_drive:
+        _drive_sync_progress_ded["active"] = False
+        _drive_sync_progress_ded["message"] = "No hay carpeta de Drive configurada."
+        return
+
+    async with async_session() as session:
+        result = await session.execute(
+            select(Video)
+            .where(Video.status == "aprobado")
+            .order_by(Video.corpus_number)
+        )
+        videos = result.scalars().all()
+
+        # Construir expected_names y un mapa: username_clean -> lista de (corpus_number, nombre)
+        expected_names: set[str] = set()
+        videos_by_username: dict[str, list[tuple[int, str]]] = {}
+        for v in videos:
+            if not v.corpus_number:
+                continue
+            username_clean = (v.username or "@desconocido").lstrip("@").replace(" ", "_")[:30]
+            name = f"{v.corpus_number:03d}_{username_clean}"
+            expected_names.add(name)
+            videos_by_username.setdefault(username_clean, []).append((v.corpus_number, name))
+
+        if not expected_names:
+            _drive_sync_progress_ded["active"] = False
+            _drive_sync_progress_ded["message"] = "No hay videos aprobados en la DB."
+            return
+
+        # Listar carpetas en Drive
+        _drive_sync_progress_ded["message"] = "Listando carpetas en Drive..."
+        await asyncio.sleep(0)
+        try:
+            drive_folders = await asyncio.wait_for(
+                loop.run_in_executor(None, listar_carpetas_video_en_drive, s.google_drive_folder_id),
+                timeout=DRIVE_TIMEOUT * 2,
+            )
+        except asyncio.TimeoutError:
+            _drive_sync_progress_ded["active"] = False
+            _drive_sync_progress_ded["message"] = "Timeout al listar carpetas en Drive."
+            return
+        except Exception as e:
+            _drive_sync_progress_ded["active"] = False
+            _drive_sync_progress_ded["message"] = f"Error al listar Drive: {e}"
+            return
+
+        _drive_sync_progress_ded["total"] = max(1, len(drive_folders))
+        rename_map: dict[str, str] = {}  # old_name -> new_name
+        orphan_names: list[str] = []
+
+        for folder in drive_folders:
+            fname = folder["name"]
+            if fname in expected_names:
+                continue
+
+            # Intentar identificar a que video aprobado pertenece por username
+            if "_" in fname:
+                folder_username = fname.split("_", 1)[1]
+                candidates = videos_by_username.get(folder_username, [])
+                if len(candidates) == 1:
+                    rename_map[fname] = candidates[0][1]
+                    continue
+                elif len(candidates) > 1:
+                    # Multiples videos del mismo username: elegir el de numero mas cercano
+                    folder_num_str = fname.split("_")[0]
+                    try:
+                        folder_num = int(folder_num_str)
+                    except ValueError:
+                        folder_num = 0
+                    best = min(candidates, key=lambda c: abs(c[0] - folder_num))
+                    rename_map[fname] = best[1]
+                    continue
+
+            orphan_names.append(fname)
+
+        # Renombrar carpetas identificadas
+        for old_name, new_name in rename_map.items():
+            _drive_sync_progress_ded["message"] = f"Renombrando {old_name} -> {new_name} en Drive..."
+            await asyncio.sleep(0)
+            try:
+                await asyncio.wait_for(
+                    loop.run_in_executor(None, renombrar_carpeta, "", s.google_drive_folder_id, old_name, new_name),
+                    timeout=DRIVE_TIMEOUT,
+                )
+                _drive_sync_progress_ded["renamed"] += 1
+            except asyncio.TimeoutError:
+                logger.warning("Timeout renombrando %s", old_name)
+            except Exception as e:
+                logger.warning("Error renombrando %s: %s", old_name, e)
+
+        # Eliminar huerfanas
+        for fname in orphan_names:
+            _drive_sync_progress_ded["message"] = f"Eliminando carpeta huerfana {fname}..."
+            await asyncio.sleep(0)
+            try:
+                ok = await asyncio.wait_for(
+                    loop.run_in_executor(None, eliminar_carpeta_video, "", s.google_drive_folder_id, fname),
+                    timeout=DRIVE_TIMEOUT,
+                )
+                if ok:
+                    _drive_sync_progress_ded["deleted"] += 1
+            except asyncio.TimeoutError:
+                logger.warning("Timeout eliminando %s", fname)
+            except Exception as e:
+                logger.warning("Error eliminando %s: %s", fname, e)
+
+        # Re-listar drive despues de renames
+        await asyncio.sleep(0)
+        try:
+            drive_folders = await asyncio.wait_for(
+                loop.run_in_executor(None, listar_carpetas_video_en_drive, s.google_drive_folder_id),
+                timeout=DRIVE_TIMEOUT * 2,
+            )
+        except (asyncio.TimeoutError, Exception):
+            pass
+
+        # Desduplicar y mover al grupo correcto
+        by_name: dict[str, list[dict]] = {}
+        for f in drive_folders:
+            by_name.setdefault(f["name"], []).append(f)
+
+        for name, folders in by_name.items():
+            if name not in expected_names:
+                continue
+            _drive_sync_progress_ded["message"] = f"Procesando {name}..."
+            current_val = _drive_sync_progress_ded["current"]
+
+            # Desduplicar: mantener 1, eliminar extras
+            for dup in folders[1:]:
+                try:
+                    ok = await asyncio.wait_for(
+                        loop.run_in_executor(
+                            None, eliminar_carpeta_video, "", s.google_drive_folder_id, dup["name"]
+                        ),
+                        timeout=DRIVE_TIMEOUT,
+                    )
+                    if ok:
+                        _drive_sync_progress_ded["deleted"] += 1
+                except asyncio.TimeoutError:
+                    logger.warning("Timeout eliminando duplicado %s", dup["name"])
+                except Exception as e:
+                    logger.warning("Error eliminando duplicado %s: %s", dup["name"], e)
+
+            # Mover al grupo correcto
+            corpus_num = int(name[:3])
+            try:
+                await asyncio.wait_for(
+                    loop.run_in_executor(
+                        None, mover_carpeta_a_grupo, folders[0]["id"], corpus_num, s.google_drive_folder_id
+                    ),
+                    timeout=DRIVE_TIMEOUT,
+                )
+                _drive_sync_progress_ded["moved"] += 1
+            except asyncio.TimeoutError:
+                logger.warning("Timeout moviendo %s", name)
+            except Exception as e:
+                logger.warning("Error moviendo %s: %s", name, e)
+
+            _drive_sync_progress_ded["current"] = current_val + 1
+
+    parts = []
+    if _drive_sync_progress_ded["renamed"]:
+        parts.append(f"{_drive_sync_progress_ded['renamed']} renombradas")
+    if _drive_sync_progress_ded["deleted"]:
+        parts.append(f"{_drive_sync_progress_ded['deleted']} eliminadas")
+    if _drive_sync_progress_ded["moved"]:
+        parts.append(f"{_drive_sync_progress_ded['moved']} movidas de grupo")
+    _drive_sync_progress_ded["active"] = False
+    _drive_sync_progress_ded["message"] = f"Sincronizacion de Drive completada. {', '.join(parts)}." if parts else "Drive ya estaba sincronizado."
+
+
+@router.post("/corpus/sync-drive", response_model=MensajeResponse)
+async def sincronizar_drive():
+    global _drive_sync_progress_ded
+    if _drive_sync_progress_ded["active"]:
+        raise HTTPException(status_code=400, detail="Ya hay una sincronizacion de Drive en curso")
+    _background(asyncio.create_task(_sync_drive_folders()))
+    return MensajeResponse(mensaje="Sincronizacion de Drive iniciada en segundo plano")
 
 
 @router.post("/videos/{video_id}/cancelar-cola", response_model=MensajeResponse)
