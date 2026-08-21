@@ -18,7 +18,7 @@ logging.basicConfig(
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
 )
 
-logger = logging.getLogger("maite")
+logger = logging.getLogger("tiktok_scraping")
 
 _background_tasks: set[asyncio.Task] = set()
 
@@ -34,7 +34,6 @@ async def lifespan(app: FastAPI):
     logger.info("=== INICIALIZANDO BASE DE DATOS ===")
     await init_db()
 
-    # Resetear videos trabados por cierre abrupto
     async with async_session() as session:
         result = await session.execute(
             update(Video)
@@ -48,14 +47,13 @@ async def lifespan(app: FastAPI):
     logger.info("Arrancando ventana de transcripcion...")
     _background(asyncio.create_task(avanzar_ventana_transcripcion()))
 
-    logger.info("=== MAITE CORPUS API INICIADA ===")
+    logger.info("=== TIKTOK SCRAPING API INICIADA ===")
     yield
-    logger.info("=== MAITE CORPUS API DETENIDA ===")
+    logger.info("=== TIKTOK SCRAPING API DETENIDA ===")
 
 
-app = FastAPI(title="Maite Corpus API", version="0.1.0", lifespan=lifespan)
+app = FastAPI(title="TikTok Scraping API", version="0.1.0", lifespan=lifespan)
 
-# CORS abierto para desarrollo local
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],

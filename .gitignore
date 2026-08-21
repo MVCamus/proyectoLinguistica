@@ -28,3 +28,9 @@ node_modules
 # OS
 .DS_Store
 Thumbs.db
+
+# Drive & Credentials
+gdrive_client_id.json
+gdrive_client_secret.json
+credentials/
+*.json.bak

@@ -1,20 +1,3 @@
-"""
-Script para configurar credenciales de Google Drive.
-
-1. Ve a https://console.cloud.google.com/
-2. Crea un proyecto o usa uno existente
-3. Habilita "Google Drive API"
-4. Ve a "Credenciales" → "Crear credenciales" → "ID de cliente OAuth"
-5. Elige "Aplicación de escritorio"
-6. Descarga el JSON y guardalo como: credentials/gdrive_client_id.json
-
-Luego ejecuta:
-
-    python setup_drive.py
-
-Te abrira el navegador para que inicies sesion con tu cuenta de Google.
-Al autorizar, se guardara el token en credentials/gdrive_credentials.json
-"""
 
 import json
 from pathlib import Path

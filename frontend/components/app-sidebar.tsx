@@ -18,18 +18,16 @@ export function AppSidebar({
 
   return (
     <aside className="flex h-screen w-64 flex-col bg-sidebar border-r border-sidebar-border">
-      {/* Logo */}
       <div className="flex items-center gap-3 px-4 py-6 border-b border-sidebar-border">
         <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-primary">
           <Target className="h-5 w-5 text-primary-foreground" />
         </div>
         <div className="flex flex-col">
-          <span className="text-sm font-semibold text-sidebar-foreground">Corpus Harvester</span>
-          <span className="text-xs text-muted-foreground">TikTok Analysis</span>
+          <span className="text-sm font-semibold text-sidebar-foreground">TikTok Scraping</span>
+          <span className="text-xs text-muted-foreground">Corpus & Analysis</span>
         </div>
       </div>
 
-      {/* Videos Count */}
       <div className="px-4 py-5 border-b border-sidebar-border">
         <p className="text-xs font-medium uppercase tracking-wider text-muted-foreground mb-1">
           Videos en Corpus
@@ -39,7 +37,6 @@ export function AppSidebar({
         </p>
       </div>
 
-      {/* Navigation */}
       <nav className="flex-1 px-3 py-4">
         <div className="mb-2">
           <p className="px-3 text-xs font-medium uppercase tracking-wider text-muted-foreground mb-2">
@@ -72,7 +69,6 @@ export function AppSidebar({
         </button>
       </nav>
 
-      {/* Footer */}
       <div className="px-4 py-3 border-t border-sidebar-border">
         <p className="text-xs text-muted-foreground text-center">
           2nd Person Analysis Tool

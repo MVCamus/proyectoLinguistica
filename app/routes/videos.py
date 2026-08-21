@@ -28,14 +28,13 @@ from app.services.discovery import parse_tiktok_urls
 from app.services.drive import eliminar_carpeta_video, listar_carpetas_video_en_drive, mover_carpeta_a_grupo, obtener_carpeta_grupo, renombrar_carpeta
 from app.config import settings as s
 
-logger = logging.getLogger("maite.api")
+logger = logging.getLogger("tiktok_scraping.api")
 
 router = APIRouter()
 
 _corpus_lock = asyncio.Lock()
 _background_tasks: set[asyncio.Task] = set()
 
-# Estado global para el progreso de renombrado/sincronización de Drive
 _drive_sync_progress = {
     "active": False,
     "current": 0,
@@ -104,7 +103,6 @@ async def ingestar_pool(
     for i, url in enumerate(urls):
         order = max_order + 1 + i
         clean_url = re.sub(r'\\u[0-9a-fA-F]{4}', lambda m: chr(int(m.group(0)[2:], 16)), url)
-        # Limpiar la URL de parámetros de búsqueda (?q=...) y fragmentos (#...)
         clean_url = clean_url.split("?")[0].split("#")[0]
         
         raw_id = clean_url.rstrip("/").split("/")[-1].split(".")[0]
@@ -298,10 +296,8 @@ async def aprobar_video(
     logger.info("=== APROBANDO VIDEO %s ===", video_id)
     logger.info("Segmentos editados: %d", len(body.transcript_editada or []))
 
-    # Convertir TranscriptSegment objects a dicts para serialización JSON
     editada_dicts = [seg.model_dump() for seg in (body.transcript_editada or [])]
 
-    # Asignar numero de corpus secuencial (con lock para evitar race condition)
     async with _corpus_lock:
         max_num = await db.scalar(select(func.max(Video.corpus_number)))
         corpus_number = (max_num or 0) + 1
@@ -315,7 +311,6 @@ async def aprobar_video(
     username_clean = (video.username or "@desconocido").lstrip("@").replace(" ", "_")[:30]
     folder_label = f"{corpus_number:03d}_{username_clean}"
 
-    # Guardar solo la transcripcion en corpus/
     loop = asyncio.get_event_loop()
     corpus_dir = Path("corpus")
     corpus_dir.mkdir(exist_ok=True)
@@ -362,7 +357,6 @@ async def rechazar_video(
 
     logger.info("=== RECHAZANDO VIDEO %s ===", video_id)
 
-    # Eliminar archivos temporales
     loop = asyncio.get_event_loop()
     tmp_dir = Path(s.tmp_audio_dir)
 
@@ -372,7 +366,6 @@ async def rechazar_video(
 
     await loop.run_in_executor(None, _limpiar_tmp)
 
-    # Eliminar registro permanente
     await db.delete(video)
     await db.commit()
     logger.info("Video %s eliminado permanentemente", video_id)
@@ -395,7 +388,6 @@ async def _background_drive_sync(
     
     loop = asyncio.get_event_loop()
     
-    # 1. Eliminar carpeta del video en Drive
     if deleted_number and username:
         username_clean = (username or "@desconocido").lstrip("@").replace(" ", "_")[:30]
         drive_folder = f"{deleted_number:03d}_{username_clean}"
@@ -413,7 +405,6 @@ async def _background_drive_sync(
         
         _drive_sync_progress["current"] += 1
 
-    # 2. Renombrar carpetas de los videos siguientes en Drive
     for vid, parent_id, old_label, new_label in renames:
         _drive_sync_progress["message"] = f"Renombrando carpeta {old_label} a {new_label} en Drive..."
         try:
@@ -423,7 +414,6 @@ async def _background_drive_sync(
         
         _drive_sync_progress["current"] += 1
 
-    # Finalizar
     _drive_sync_progress["active"] = False
     _drive_sync_progress["message"] = "Actualización de Google Drive completada."
 
@@ -448,19 +438,16 @@ async def eliminar_video(
         deleted_number = video.corpus_number
         username = video.username
 
-        # Eliminar de la base de datos
         await db.delete(video)
         await db.commit()
         logger.info("Video %s eliminado de la DB", video_id)
 
-        # Eliminar archivos locales
         if deleted_number:
             username_clean = (username or "@desconocido").lstrip("@").replace(" ", "_")[:30]
             folder_label = f"{deleted_number:03d}_{username_clean}"
             for ext in [".txt"]:
                 (Path("corpus") / f"{folder_label}{ext}").unlink(missing_ok=True)
 
-        # Renumerar videos siguientes en DB y renombrar archivos locales
         renames = []
         if deleted_number:
             result = await db.execute(
@@ -471,7 +458,6 @@ async def eliminar_video(
                 new_num = old_num - 1
                 v.corpus_number = new_num
 
-                # Renombrar archivos locales
                 u = (v.username or "@desconocido").lstrip("@").replace(" ", "_")[:30]
                 old_label = f"{old_num:03d}_{u}"
                 new_label = f"{new_num:03d}_{u}"
@@ -485,7 +471,6 @@ async def eliminar_video(
 
             await db.commit()
 
-        # Encolar tareas pesadas de Drive en segundo plano
         if deleted_number:
             background_tasks.add_task(
                 _background_drive_sync,
@@ -586,7 +571,6 @@ async def _sync_corpus_txt_files():
         )
         aprobados = result.scalars().all()
 
-        # Construir set de nombres esperados y mapeo numero -> nombre esperado
         expected_files: set[str] = set()
         expected_by_number: dict[int, str] = {}
 
@@ -600,7 +584,6 @@ async def _sync_corpus_txt_files():
 
         _corpus_sync_progress["total"] = len(aprobados) + len(list(corpus_dir.glob("*.txt")))
 
-        # Fase 1: crear .txt faltantes para cada video aprobado
         for v in aprobados:
             if not v.corpus_number or not v.transcript_editada:
                 _corpus_sync_progress["current"] += 1
@@ -630,7 +613,6 @@ async def _sync_corpus_txt_files():
             _corpus_sync_progress["created"] += 1
             logger.info("Creado %s", txt_name)
 
-        # Fase 2: limpiar archivos huerfanos o duplicados
         all_txt = sorted(corpus_dir.glob("*.txt"))
         for txt_path in all_txt:
             fname = txt_path.name
@@ -641,13 +623,11 @@ async def _sync_corpus_txt_files():
             deleted = False
 
             if parsed_num is not None and parsed_num in expected_by_number:
-                # Duplicado: mismo numero pero distinto username -> renombramiento viejo
                 _corpus_sync_progress["message"] = f"Eliminando duplicado {fname}..."
                 await loop.run_in_executor(None, txt_path.unlink, True)
                 deleted = True
                 logger.info("Eliminado duplicado %s (esperado: %s)", fname, expected_by_number[parsed_num])
             elif parsed_num is not None and parsed_num not in expected_by_number:
-                # Huerfano: el video con ese numero ya no esta aprobado
                 _corpus_sync_progress["message"] = f"Eliminando huerfano {fname}..."
                 await loop.run_in_executor(None, txt_path.unlink, True)
                 deleted = True
@@ -775,7 +755,6 @@ async def _fix_corpus_numbering():
                 renumbering.append((v, v.corpus_number, expected))
             expected += 1
 
-        # Listar carpetas en Drive primero para calcular total correcto
         drive_folders: list[dict] = []
         if has_drive:
             _corpus_fix_progress["message"] = "Listando carpetas en Drive..."
@@ -795,7 +774,6 @@ async def _fix_corpus_numbering():
         total = len(renumbering) + len(drive_folders)
         _corpus_fix_progress["total"] = max(1, total)
 
-        # Paso 1: Renumerar DB + renombrar archivos locales
         if renumbering:
             _corpus_fix_progress["message"] = "Renumerando videos en la base de datos..."
             for v, old_num, new_num in renumbering:
@@ -818,7 +796,6 @@ async def _fix_corpus_numbering():
                     logger.info("Renombrado %s -> %s", old_name, new_name)
                 _corpus_fix_progress["message"] = f"Renombrado {old_name} -> {new_name}..."
 
-        # Paso 2: Sincronizar Drive
         if has_drive and drive_folders:
             _corpus_fix_progress["message"] = "Sincronizando carpetas en Drive..."
 
@@ -836,7 +813,6 @@ async def _fix_corpus_numbering():
                 username_clean = (v.username or "@desconocido").lstrip("@").replace(" ", "_")[:30]
                 expected_names.add(f"{v.corpus_number:03d}_{username_clean}")
 
-            # A: Renombrar carpetas de videos renumerados
             for v, old_num, new_num in renumbering:
                 username_clean = (v.username or "@desconocido").lstrip("@").replace(" ", "_")[:30]
                 old_label = f"{old_num:03d}_{username_clean}"
@@ -856,7 +832,6 @@ async def _fix_corpus_numbering():
                 except Exception as e:
                     logger.warning("Error renombrando %s en Drive: %s", old_label, e)
 
-            # B: Re-listar drive folders (estado fresco despues de renames)
             if renumbering:
                 await asyncio.sleep(0)
                 try:
@@ -867,7 +842,6 @@ async def _fix_corpus_numbering():
                 except (asyncio.TimeoutError, Exception) as e:
                     logger.warning("Error al re-listar Drive: %s", e)
 
-            # C: Agrupar por nombre, desduplicar, mover a grupo correcto, eliminar huerfanos
             by_name: dict[str, list[dict]] = {}
             for f in drive_folders:
                 by_name.setdefault(f["name"], []).append(f)
@@ -877,7 +851,6 @@ async def _fix_corpus_numbering():
                 current_val = _corpus_fix_progress["current"]
 
                 if name in expected_names:
-                    # Desduplicar: mantener la primera, eliminar las demas
                     for dup in folders[1:]:
                         try:
                             ok = await asyncio.wait_for(
@@ -894,7 +867,6 @@ async def _fix_corpus_numbering():
                         except Exception as e:
                             logger.warning("Error eliminando duplicado %s: %s", dup["name"], e)
 
-                    # Mover al grupo correcto segun su numero
                     corpus_num = int(name[:3])
                     try:
                         await asyncio.wait_for(
@@ -908,7 +880,6 @@ async def _fix_corpus_numbering():
                     except Exception as e:
                         logger.warning("Error moviendo %s al grupo: %s", name, e)
                 else:
-                    # Huerfana o renombre viejo: eliminar todas las copias
                     for f in folders:
                         try:
                             ok = await asyncio.wait_for(
@@ -985,7 +956,6 @@ async def _sync_drive_folders():
         )
         videos = result.scalars().all()
 
-        # Construir expected_names y un mapa: username_clean -> lista de (corpus_number, nombre)
         expected_names: set[str] = set()
         videos_by_username: dict[str, list[tuple[int, str]]] = {}
         for v in videos:
@@ -1001,7 +971,6 @@ async def _sync_drive_folders():
             _drive_sync_progress_ded["message"] = "No hay videos aprobados en la DB."
             return
 
-        # Listar carpetas en Drive
         _drive_sync_progress_ded["message"] = "Listando carpetas en Drive..."
         await asyncio.sleep(0)
         try:
@@ -1027,7 +996,6 @@ async def _sync_drive_folders():
             if fname in expected_names:
                 continue
 
-            # Intentar identificar a que video aprobado pertenece por username
             if "_" in fname:
                 folder_username = fname.split("_", 1)[1]
                 candidates = videos_by_username.get(folder_username, [])
@@ -1035,7 +1003,6 @@ async def _sync_drive_folders():
                     rename_map[fname] = candidates[0][1]
                     continue
                 elif len(candidates) > 1:
-                    # Multiples videos del mismo username: elegir el de numero mas cercano
                     folder_num_str = fname.split("_")[0]
                     try:
                         folder_num = int(folder_num_str)
@@ -1047,7 +1014,6 @@ async def _sync_drive_folders():
 
             orphan_names.append(fname)
 
-        # Renombrar carpetas identificadas
         for old_name, new_name in rename_map.items():
             _drive_sync_progress_ded["message"] = f"Renombrando {old_name} -> {new_name} en Drive..."
             await asyncio.sleep(0)
@@ -1062,7 +1028,6 @@ async def _sync_drive_folders():
             except Exception as e:
                 logger.warning("Error renombrando %s: %s", old_name, e)
 
-        # Eliminar huerfanas
         for fname in orphan_names:
             _drive_sync_progress_ded["message"] = f"Eliminando carpeta huerfana {fname}..."
             await asyncio.sleep(0)
@@ -1078,7 +1043,6 @@ async def _sync_drive_folders():
             except Exception as e:
                 logger.warning("Error eliminando %s: %s", fname, e)
 
-        # Re-listar drive despues de renames
         await asyncio.sleep(0)
         try:
             drive_folders = await asyncio.wait_for(
@@ -1088,7 +1052,6 @@ async def _sync_drive_folders():
         except (asyncio.TimeoutError, Exception):
             pass
 
-        # Desduplicar y mover al grupo correcto
         by_name: dict[str, list[dict]] = {}
         for f in drive_folders:
             by_name.setdefault(f["name"], []).append(f)
@@ -1099,7 +1062,6 @@ async def _sync_drive_folders():
             _drive_sync_progress_ded["message"] = f"Procesando {name}..."
             current_val = _drive_sync_progress_ded["current"]
 
-            # Desduplicar: mantener 1, eliminar extras
             for dup in folders[1:]:
                 try:
                     ok = await asyncio.wait_for(
@@ -1115,7 +1077,6 @@ async def _sync_drive_folders():
                 except Exception as e:
                     logger.warning("Error eliminando duplicado %s: %s", dup["name"], e)
 
-            # Mover al grupo correcto
             corpus_num = int(name[:3])
             try:
                 await asyncio.wait_for(

@@ -23,7 +23,6 @@ export default function Home() {
   const failuresRef = useRef(0)
   const MAX_FAILURES = 10
 
-  // Polling para el estado de sincronización de Drive en segundo plano
   useEffect(() => {
     let interval: ReturnType<typeof setInterval> | undefined
 
@@ -316,7 +315,6 @@ export default function Home() {
       />
 
       <main className="flex-1 flex flex-col overflow-hidden">
-        {/* Banner de Sincronización de Drive */}
         {driveSyncStatus?.active && (
           <div className="bg-amber-500/10 border-b border-amber-500/20 px-6 py-3 animate-in fade-in slide-in-from-top-2 duration-300 shrink-0">
             <div className="max-w-4xl flex items-center justify-between gap-6">

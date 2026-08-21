@@ -134,7 +134,6 @@ export function CorpusView({ corpus, onRemove, onSyncTxt, syncStatus, onDismissS
 
   return (
     <div className="flex-1 flex flex-col overflow-hidden">
-      {/* Header */}
       <div className="sticky top-0 z-10 bg-background/95 backdrop-blur border-b border-border px-6 py-4">
         <div className="flex items-center justify-between mb-4">
           <div>
@@ -187,7 +186,6 @@ export function CorpusView({ corpus, onRemove, onSyncTxt, syncStatus, onDismissS
           </div>
         </div>
 
-        {/* Sync Progress Banner */}
         {syncStatus?.active && (
           <div className="mb-3 bg-emerald-500/10 border border-emerald-500/20 rounded-lg px-4 py-3 animate-in fade-in slide-in-from-top-2 duration-300">
             <div className="flex items-center justify-between mb-1.5">
@@ -218,7 +216,6 @@ export function CorpusView({ corpus, onRemove, onSyncTxt, syncStatus, onDismissS
           </div>
         )}
 
-        {/* Completed Sync Banner */}
         {syncStatus && !syncStatus.active && (
           <div className="mb-3 bg-blue-500/10 border border-blue-500/20 rounded-lg px-4 py-3 animate-in fade-in slide-in-from-top-2 duration-300">
             <div className="flex items-center justify-between">
@@ -237,7 +234,6 @@ export function CorpusView({ corpus, onRemove, onSyncTxt, syncStatus, onDismissS
           </div>
         )}
 
-        {/* Fix Numbering Progress Banner */}
         {fixNumberingStatus?.active && (
           <div className="mb-3 bg-violet-500/10 border border-violet-500/20 rounded-lg px-4 py-3 animate-in fade-in slide-in-from-top-2 duration-300">
             <div className="flex items-center justify-between mb-1.5">
@@ -268,7 +264,6 @@ export function CorpusView({ corpus, onRemove, onSyncTxt, syncStatus, onDismissS
           </div>
         )}
 
-        {/* Completed Fix Numbering Banner */}
         {fixNumberingStatus && !fixNumberingStatus.active && (
           <div className="mb-3 bg-blue-500/10 border border-blue-500/20 rounded-lg px-4 py-3 animate-in fade-in slide-in-from-top-2 duration-300">
             <div className="flex items-center justify-between">
@@ -287,7 +282,6 @@ export function CorpusView({ corpus, onRemove, onSyncTxt, syncStatus, onDismissS
           </div>
         )}
 
-        {/* Sync Drive Progress Banner */}
         {syncDriveStatus?.active && (
           <div className="mb-3 bg-violet-500/10 border border-violet-500/20 rounded-lg px-4 py-3 animate-in fade-in slide-in-from-top-2 duration-300">
             <div className="flex items-center justify-between mb-1.5">
@@ -318,7 +312,6 @@ export function CorpusView({ corpus, onRemove, onSyncTxt, syncStatus, onDismissS
           </div>
         )}
 
-        {/* Completed Sync Drive Banner */}
         {syncDriveStatus && !syncDriveStatus.active && (
           <div className="mb-3 bg-blue-500/10 border border-blue-500/20 rounded-lg px-4 py-3 animate-in fade-in slide-in-from-top-2 duration-300">
             <div className="flex items-center justify-between">
@@ -337,7 +330,6 @@ export function CorpusView({ corpus, onRemove, onSyncTxt, syncStatus, onDismissS
           </div>
         )}
 
-        {/* Search & Sort Dropdown */}
         <div className="flex gap-4">
           <div className="relative flex-1">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
@@ -368,7 +360,6 @@ export function CorpusView({ corpus, onRemove, onSyncTxt, syncStatus, onDismissS
         </div>
       </div>
 
-      {/* Table */}
       <div className="flex-1 overflow-auto px-6 py-4">
         {filteredCorpus.length === 0 ? (
           <div className="flex flex-col items-center justify-center h-64 text-muted-foreground">
@@ -459,7 +450,6 @@ export function CorpusView({ corpus, onRemove, onSyncTxt, syncStatus, onDismissS
         )}
       </div>
 
-      {/* Verify Dialog */}
       <Dialog open={verifyOpen} onOpenChange={setVerifyOpen}>
         <DialogContent className="max-w-lg max-h-[80vh] overflow-auto">
           <DialogHeader>

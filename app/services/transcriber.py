@@ -5,7 +5,7 @@ from faster_whisper import WhisperModel
 
 from app.config import settings as s
 
-logger = logging.getLogger("maite.transcriber")
+logger = logging.getLogger("tiktok_scraping.transcriber")
 
 _model: WhisperModel | None = None
 

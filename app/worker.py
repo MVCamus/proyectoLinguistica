@@ -19,7 +19,7 @@ from app.services.drive import (
 )
 from app.services.transcriber import transcribir
 
-logger = logging.getLogger("maite.worker")
+logger = logging.getLogger("tiktok_scraping.worker")
 
 _ventana_lock = asyncio.Lock()
 _background_tasks: set[asyncio.Task] = set()
@@ -84,7 +84,6 @@ async def transcribir_video(video_id: str):
         except Exception as e:
             logger.warning("No se pudo extraer metadata con yt-dlp: %s", e)
 
-        # Fallback para obtener el usuario del URL si yt-dlp falló o no lo extrajo
         if video.username == "@pendiente" and video.url:
             username_match = re.search(r"tiktok\.com/(@[\w.-]+)/video/", video.url)
             if username_match:
@@ -155,8 +154,6 @@ async def transcribir_video(video_id: str):
 
 
 async def avanzar_ventana_transcripcion():
-    """Sliding window: mantiene ~PRETRANSCRIBE_WINDOW videos en transcripcion,
-    pero solo procesa 1 video a la vez para respetar la cola."""
     async with _ventana_lock:
         logger.info("=== AVANZAR VENTANA TRANSCRIPCION ===")
         session = async_session()
@@ -226,7 +223,6 @@ async def subir_a_drive(video_id: str, corpus_number: int | None = None, max_ret
             else:
                 logger.info("TXT encontrado: %s", txt_path)
 
-            # Si corpus_number es None/0, usar video.corpus_number (nunca 0)
             cnum = corpus_number or video.corpus_number
             if not cnum:
                 logger.error("Video %s no tiene corpus_number asignado, abortando subida", video_id)
@@ -283,7 +279,6 @@ async def subir_a_drive(video_id: str, corpus_number: int | None = None, max_ret
             await session.rollback()
             video = await session.get(Video, video_id)
             logger.error("Error subiendo a Drive video %s: %s", video_id, exc)
-            # Detectar errores de credenciales/cuota por tipo de excepción de Google API
             exc_type = type(exc).__name__
             exc_str = str(exc).lower()
             is_auth_error = any(k in exc_str for k in ("credentials", "refresh", "unauthorized", "auth"))

@@ -1,6 +1,5 @@
 import { Video, TranscriptSegment } from './types'
 
-// Sample transcripts with Spanish 2nd person pronouns for demonstration
 const sampleTranscripts = [
   "Oye, ¿tú sabías que esto es súper fácil? Te lo explico: cuando tú haces esto, contigo todo cambia. Mira, te cuento mi experiencia...",
   "Hola a todos, hoy les voy a mostrar algo increíble. Usted no va a creer lo que voy a compartir. Si te interesa, quédate hasta el final.",
@@ -28,9 +27,7 @@ const sampleTranscripts = [
   "Escuchen bien, te lo explico una vez más. Contigo podemos lograrlo, usted tiene el poder.",
 ]
 
-// Helper to generate segments from a transcript
 function generateSegments(transcript: string, duration: number): TranscriptSegment[] {
-  // Split by sentence (period, exclamation, question mark)
   const sentences = transcript.split(/(?<=[.!?])\s+/).filter(s => s.trim())
   const segmentDuration = duration / sentences.length
   
@@ -42,7 +39,6 @@ function generateSegments(transcript: string, duration: number): TranscriptSegme
   }))
 }
 
-// Sample video descriptions
 const sampleDescriptions = [
   "Este es mi tip favorito del mes, espero que les sirva tanto como a mi. No olviden seguirme para mas contenido.",
   "Parte 3 de la serie que tanto me pidieron. Comenten si quieren mas videos asi.",
@@ -54,7 +50,6 @@ const sampleDescriptions = [
   "Mi rutina completa paso a paso. Dejen sus preguntas en comentarios.",
 ]
 
-// Common TikTok hashtags for Spanish content
 const sampleHashtagSets = [
   ['#storytime', '#parati', '#viral', '#fyp'],
   ['#tutorial', '#tips', '#aprendeentiktok', '#hack'],
@@ -66,10 +61,8 @@ const sampleHashtagSets = [
   ['#trend', '#challenge', '#baile', '#musica'],
 ]
 
-// Using a reliable sample video that works with CORS
 const SAMPLE_VIDEO_URL = 'https://storage.googleapis.com/gtv-videos-bucket/sample/BigBuckBunny.mp4'
 
-// Deterministic pseudo-random number generator to avoid hydration mismatch
 function seededRandom(seed: number): number {
   const x = Math.sin(seed) * 10000
   return x - Math.floor(x)
@@ -77,7 +70,6 @@ function seededRandom(seed: number): number {
 
 const sampleVideos: Video[] = Array.from({ length: 24 }, (_, i) => {
   const transcript = sampleTranscripts[i % sampleTranscripts.length]
-  // Use deterministic values based on index to avoid hydration mismatch
   const duration = Math.floor(seededRandom(i * 100) * 45) + 15
   const authorNum = Math.floor(seededRandom(i * 200) * 1000)
   const likes = Math.floor(seededRandom(i * 300) * 50000) + 100
@@ -102,7 +94,6 @@ export function getDiscoveryVideos(): Video[] {
 }
 
 export function getRandomVideo(): Video {
-  // Use timestamp-based seed for new videos (only called client-side)
   const seed = typeof window !== 'undefined' ? Date.now() : 0
   const index = Math.floor(seededRandom(seed) * sampleTranscripts.length)
   const transcript = sampleTranscripts[index]

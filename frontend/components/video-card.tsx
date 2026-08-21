@@ -46,8 +46,6 @@ export function VideoCard({ video, onApprove, onReject }: VideoCardProps) {
   const initializedRef = useRef(false)
   const isProcessing = video.status === 'descargando' || video.status === 'transcribiendo' || video.status === 'pendiente'
 
-  // Solo inicializar segments la primera vez que se monta el componente,
-  // ignorar actualizaciones posteriores del polling para no perder ediciones
   useEffect(() => {
     if (!initializedRef.current) {
       setSegments(video.segments)
@@ -87,7 +85,6 @@ export function VideoCard({ video, onApprove, onReject }: VideoCardProps) {
 
   return (
     <div className="bg-card rounded-lg border border-border overflow-hidden">
-      {/* Header: username + description */}
       <div className="px-4 py-3 border-b border-border bg-secondary/30">
         <div className="flex items-center gap-2">
           <span className="text-sm font-semibold text-foreground">
@@ -112,7 +109,6 @@ export function VideoCard({ video, onApprove, onReject }: VideoCardProps) {
         )}
       </div>
 
-      {/* Transcript segments */}
       <div className="p-3 max-h-[200px] overflow-y-auto">
         {segments.length === 0 ? (
           <p className="text-sm text-muted-foreground text-center py-4">
@@ -146,7 +142,6 @@ export function VideoCard({ video, onApprove, onReject }: VideoCardProps) {
         )}
       </div>
 
-      {/* Actions */}
       <div className="flex gap-2 p-3 border-t border-border bg-secondary/10">
         <Button
           onClick={handleApprove}

@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
-  "name": "Maite Corpus - TikTok Audio Extractor",
+  "name": "TikTok Scraping - Audio Extractor",
   "version": "1.0",
-  "description": "Envía el audio de TikTok al servidor del corpus lingüístico",
+  "description": "Envía el audio de TikTok al servidor de TikTok Scraping",
   "permissions": ["activeTab", "scripting"],
   "host_permissions": ["https://www.tiktok.com/*", "http://localhost:8000/*", "https://localhost:8000/*"],
   "action": {

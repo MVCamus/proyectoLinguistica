@@ -6,7 +6,7 @@ from pathlib import Path
 import requests
 import yt_dlp
 
-logger = logging.getLogger("maite.downloader")
+logger = logging.getLogger("tiktok_scraping.downloader")
 
 
 def _descargar_via_tikwm(url: str, video_id: str, tmp_dir: Path) -> Path | None:
@@ -56,8 +56,6 @@ def descargar_audio(
     tmp_dir: Path,
     cookies_file: Path | None = None,
 ) -> Path:
-    """Descarga el video mp4 + extrae audio mp3.
-    Retorna la ruta del mp3 (para Whisper). El mp4 queda al lado para el frontend."""
     if url.startswith("file://"):
         return _procesar_archivo_local(url, video_id, tmp_dir)
 
@@ -67,17 +65,14 @@ def descargar_audio(
     if _es_url_directa(url):
         return _descargar_desde_cdn(url, video_id, tmp_dir)
 
-    # 1. Intentar con TikWM API
     mp3_path = _descargar_via_tikwm(url, video_id, tmp_dir)
     if mp3_path and mp3_path.exists():
         return mp3_path
 
-    # 2. Intentar con Lovetik API
     mp3_path = _descargar_via_lovetik(url, video_id, tmp_dir)
     if mp3_path and mp3_path.exists():
         return mp3_path
 
-    # 3. Fallback a yt-dlp
     return ytdlp_reintentar(url, video_id, tmp_dir, cookies_file)
 
 
@@ -87,7 +82,6 @@ def _procesar_archivo_local(url: str, video_id: str, tmp_dir: Path) -> Path:
     mp4_path = tmp_dir / f"{video_id}.mp4"
     mp3_path = tmp_dir / f"{video_id}.mp3"
 
-    # Mover el archivo original a mp4
     if not mp4_path.exists():
         shutil.move(str(video_path), str(mp4_path))
         logger.info("Archivo local movido a: %s", mp4_path)
@@ -140,7 +134,6 @@ def _descargar_desde_cdn(url: str, video_id: str, tmp_dir: Path) -> Path:
         )
         logger.info("Audio extraido: %s", mp3_path)
 
-    # NO borramos el mp4 — lo necesita el frontend
     return mp3_path
 
 
@@ -150,7 +143,6 @@ def _descargar_solo_video(
     tmp_dir: Path,
     cookies_file: Path | None,
 ) -> Path:
-    """Descarga el video completo (video+audio) y lo mergea a mp4."""
     opts: dict = {
         "format": "bestvideo+bestaudio/best",
         "outtmpl": str(tmp_dir / "%(id)s.%(ext)s"),
@@ -188,12 +180,10 @@ def _descargar_solo_video(
 
 
 def _extraer_audio(video_path: Path, audio_path: Path) -> Path:
-    """Extrae audio con ffmpeg. Reintenta con codec alternativo si falla."""
     if audio_path.exists():
         logger.info("Audio ya existe: %s", audio_path)
         return audio_path
 
-    # Intentos con diferentes configuraciones
     intentos = [
         ("mp3 (libmp3lame)", ["ffmpeg", "-i", str(video_path), "-vn", "-acodec", "libmp3lame",
                                "-q:a", "2", "-y", str(audio_path)]),
@@ -209,7 +199,6 @@ def _extraer_audio(video_path: Path, audio_path: Path) -> Path:
             logger.info("Extrayendo audio (%s): %s -> ...", nombre, video_path.name)
             result = subprocess.run(cmd, capture_output=True, timeout=120, check=False)
             if result.returncode == 0:
-                # Si usamos aac, renombrar a .mp3 (Whisper lo lee igual)
                 salida = Path(cmd[-1])
                 if salida.suffix == ".aac":
                     salida.rename(audio_path)

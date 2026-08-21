@@ -1,7 +1,6 @@
 fastapi
 uvicorn
 sqlalchemy
-aiosqlite
 yt-dlp
 faster-whisper
 google-api-python-client
@@ -12,4 +11,5 @@ httpx
 python-multipart
 asyncpg
 requests
+psycopg2-binary
 

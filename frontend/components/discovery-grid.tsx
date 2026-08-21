@@ -84,7 +84,6 @@ export function DiscoveryGrid({ videos, processingQueue, onApprove, onReject, on
 
   return (
     <div className="flex-1 overflow-auto">
-      {/* Search Header */}
       <div className="sticky top-0 z-10 bg-background/95 backdrop-blur border-b border-border">
         <div className="px-6 py-4">
           <h1 className="text-xl font-semibold text-foreground">
@@ -96,7 +95,6 @@ export function DiscoveryGrid({ videos, processingQueue, onApprove, onReject, on
         </div>
       </div>
 
-      {/* Manual URL Input */}
       <div className="px-6 pb-4 pt-4">
         <button
           onClick={() => setShowUrlInput(!showUrlInput)}
@@ -128,7 +126,6 @@ export function DiscoveryGrid({ videos, processingQueue, onApprove, onReject, on
         )}
       </div>
 
-      {/* Processing Queue */}
       {processingQueue.length > 0 && (
         <div className="px-6 pb-6">
           <div className="flex items-center gap-2 mb-3">
@@ -165,7 +162,6 @@ export function DiscoveryGrid({ videos, processingQueue, onApprove, onReject, on
         </div>
       )}
 
-      {/* Ready for Review */}
       <div className="px-6 pb-6">
         <div className="flex items-center gap-2 mb-3">
           <CheckCircle2 className="h-5 w-5 text-green-500" />

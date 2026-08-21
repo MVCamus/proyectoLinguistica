@@ -8,12 +8,11 @@ from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaFileUpload
 
-logger = logging.getLogger("maite.drive")
+logger = logging.getLogger("tiktok_scraping.drive")
 
 SCOPES = ["https://www.googleapis.com/auth/drive.file"]
 
-# Los nombres de carpeta/archivo pueden contener caracteres especiales como comillas simples.
-# La API de Drive no soporta parámetros con nombre para el campo `q`, así que escapamos manualmente.
+
 def _escape_q(val: str) -> str:
     return val.replace("\\", "\\\\").replace("'", "\\'")
 BASE_DIR = Path(__file__).resolve().parent.parent.parent
@@ -53,7 +52,6 @@ def _group_folder_name(corpus_number: int) -> str:
 
 
 def obtener_carpeta_grupo(corpus_number: int, root_folder_id: str) -> str:
-    """Obtiene o crea la carpeta agrupadora (e.g. 'videos 1 - 100') para un corpus_number."""
     if corpus_number is None:
         return root_folder_id
     service = _get_service()
@@ -120,7 +118,6 @@ def subir_transcripcion(txt_path: Path, folder_id: str) -> str:
 
 
 def _buscar_o_crear_carpeta(service, folder_name: str, parent_folder_id: str) -> str:
-    """Busca una carpeta por nombre; si no existe, la crea. Retorna el ID."""
     results = (
         service.files()
         .list(
@@ -154,7 +151,6 @@ def subir_video(video_path: Path, video_id: str, parent_folder_id: str, folder_n
 
 
 def subir_txt_en_carpeta(txt_path: Path, video_id: str, parent_folder_id: str, folder_name: str | None = None, file_name: str | None = None) -> str:
-    """Busca la subcarpeta del video y sube el archivo adentro."""
     folder_name = folder_name or f"video_{video_id}"
     file_name = file_name or f"{video_id}.txt"
     service = _get_service()
@@ -186,10 +182,8 @@ def subir_txt_en_carpeta(txt_path: Path, video_id: str, parent_folder_id: str, f
 
 
 def renombrar_carpeta(video_id: str, parent_folder_id: str, old_name: str, new_name: str) -> bool:
-    """Renombra las carpetas que coincidan con old_name dentro de la carpeta grupo en Drive."""
     try:
         service = _get_service()
-        # Extraer corpus_number del old_name (e.g. "149_username" -> 149)
         corpus_number = None
         if old_name and old_name[0].isdigit():
             try:
@@ -197,14 +191,12 @@ def renombrar_carpeta(video_id: str, parent_folder_id: str, old_name: str, new_n
             except (ValueError, IndexError):
                 pass
 
-        # Buscar dentro de la carpeta grupo primero
         group_ids = []
         if corpus_number and parent_folder_id:
             group_id = _obtener_carpeta_grupo_por_nombre(service, corpus_number, parent_folder_id)
             if group_id:
                 group_ids.append(group_id)
 
-        # Fallback: buscar en toda la raíz
         if not group_ids and parent_folder_id:
             group_ids.append(parent_folder_id)
 
@@ -240,7 +232,6 @@ def renombrar_carpeta(video_id: str, parent_folder_id: str, old_name: str, new_n
 
 
 def _eliminar_permanentemente(service, file_id: str, desc: str) -> bool:
-    """Elimina permanentemente un archivo/carpeta de Drive."""
     try:
         service.files().delete(fileId=file_id).execute()
         logger.info("%s (%s) eliminado permanentemente", desc, file_id)
@@ -251,7 +242,6 @@ def _eliminar_permanentemente(service, file_id: str, desc: str) -> bool:
 
 
 def _obtener_carpeta_grupo_por_nombre(service, corpus_number: int, root_folder_id: str) -> str | None:
-    """Busca (sin crear) la carpeta agrupadora para un corpus_number."""
     group_name = _group_folder_name(corpus_number)
     results = (
         service.files()
@@ -267,7 +257,6 @@ def _obtener_carpeta_grupo_por_nombre(service, corpus_number: int, root_folder_i
 
 
 def mover_carpeta_a_grupo(folder_id: str, new_corpus_number: int, root_folder_id: str) -> bool:
-    """Mueve una carpeta de video al grupo correcto segun new_corpus_number."""
     import re
     try:
         service = _get_service()
@@ -276,7 +265,6 @@ def mover_carpeta_a_grupo(folder_id: str, new_corpus_number: int, root_folder_id
 
         target_group = _group_folder_name(new_corpus_number)
 
-        # Buscar carpeta grupo destino por nombre debajo de root
         group_id = _obtener_carpeta_grupo_por_nombre(service, new_corpus_number, root_folder_id)
         if not group_id:
             group_id = _crear_subcarpeta(service, target_group, root_folder_id)
@@ -284,7 +272,6 @@ def mover_carpeta_a_grupo(folder_id: str, new_corpus_number: int, root_folder_id
         if group_id in current_parents:
             return True
 
-        # Remover de todos los parents actuales y agregar al nuevo
         for parent_id in current_parents:
             if parent_id != group_id:
                 service.files().update(fileId=folder_id, removeParents=parent_id).execute()
@@ -298,12 +285,10 @@ def mover_carpeta_a_grupo(folder_id: str, new_corpus_number: int, root_folder_id
 
 
 def listar_carpetas_video_en_drive(parent_folder_id: str) -> list[dict]:
-    """Retorna [{id, name}] de todas las carpetas NNN_* en Drive, buscando dentro de las carpetas grupo."""
     import re
     service = _get_service()
     folders = []
 
-    # Listar carpetas grupo (e.g. "videos 1 - 100", "videos 101 - 200")
     page_token = None
     while True:
         results = (
@@ -319,7 +304,6 @@ def listar_carpetas_video_en_drive(parent_folder_id: str) -> list[dict]:
         for gf in results.get("files", []):
             if not re.match(r"^videos \d+ - \d+$", gf["name"]):
                 continue
-            # Listar subcarpetas dentro de cada carpeta grupo
             sub_token = None
             while True:
                 sub = (
@@ -346,17 +330,11 @@ def listar_carpetas_video_en_drive(parent_folder_id: str) -> list[dict]:
 
 
 def eliminar_carpeta_video(video_id: str, parent_folder_id: str, folder_name: str | None = None) -> bool:
-    """Busca y elimina permanentemente un video de Drive:
-    1. Busca la carpeta por nombre dentro de la carpeta grupo, vacía su contenido y la elimina
-    2. Como fallback, busca la carpeta por nombre en todo el Drive
-    3. Como ultimo recurso, busca archivos sueltos por video_id
-    """
     folder_name = folder_name or f"video_{video_id}"
     eliminadas = 0
     try:
         service = _get_service()
 
-        # Extraer corpus_number del folder_name (e.g. "149_username" -> 149)
         corpus_number = None
         if folder_name and folder_name[0].isdigit():
             try:
@@ -366,7 +344,6 @@ def eliminar_carpeta_video(video_id: str, parent_folder_id: str, folder_name: st
 
         carpetas = []
 
-        # Estrategia 1: buscar dentro de la carpeta grupo (e.g. "videos 101 - 200") si tenemos root_folder_id
         if corpus_number and parent_folder_id:
             group_id = _obtener_carpeta_grupo_por_nombre(service, corpus_number, parent_folder_id)
             if group_id:
@@ -382,7 +359,6 @@ def eliminar_carpeta_video(video_id: str, parent_folder_id: str, folder_name: st
                 )
                 carpetas.extend(results.get("files", []))
 
-        # Estrategia 2: buscar por nombre en todo el Drive (fallback)
         if not carpetas:
             logger.info("Buscando carpeta '%s' en todo el Drive...", folder_name)
             page_token = None
@@ -424,7 +400,6 @@ def eliminar_carpeta_video(video_id: str, parent_folder_id: str, folder_name: st
             if _eliminar_permanentemente(service, fid, f"Carpeta '{carpeta['name']}'"):
                 eliminadas += 1
 
-        # Estrategia 3: buscar archivos sueltos con este video_id (mp4, txt, metadata)
         if not eliminadas:
             logger.info("Buscando archivos sueltos del video %s en Drive...", video_id)
             for patron in [f"{video_id}.mp4", f"{video_id}.txt", f"{video_id}_metadata.txt"]:

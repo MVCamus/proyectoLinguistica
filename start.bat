@@ -28,20 +28,23 @@ if not exist "%~dp0frontend\node_modules" (
 )
 
 :: Iniciar API
-echo [3/4] Iniciando API...
-start /b "" "%VENV_PYTHON%" -m uvicorn app.main:app --host 0.0.0.0 --port 8000 > nul 2>&1
+echo [3/4] Iniciando API (FastAPI)...
+start "" /b "%VENV_PYTHON%" -m uvicorn app.main:app --host 0.0.0.0 --port 8000
 
 timeout /t 3 /nobreak >nul
 
 :: Iniciar Frontend
-echo [4/4] Iniciando Frontend...
-start /b "" cmd /c "cd /d "%~dp0frontend" && npm run dev" > nul 2>&1
+echo [4/4] Iniciando Frontend (Next.js)...
+start "" /b cmd /c "cd /d "%~dp0frontend" && npm run dev"
 
+echo.
 echo ==========================================
 echo   Frontend:  http://localhost:3000
 echo   API:       http://localhost:8000
+echo   Docs:      http://localhost:8000/docs
 echo ==========================================
-echo Cerra esta ventana para detener todo
+echo Cerra esta ventana para detener todo.
+echo.
 
 :loop
 timeout /t 10 /nobreak >nul

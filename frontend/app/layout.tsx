@@ -9,8 +9,8 @@ const inter = Inter({ subsets: ["latin"], variable: "--font-inter" });
 const jetbrainsMono = JetBrains_Mono({ subsets: ["latin"], variable: "--font-jetbrains" });
 
 export const metadata: Metadata = {
-  title: 'Linguistic Corpus Harvester',
-  description: 'Research tool for Spanish TikTok discourse analysis',
+  title: 'TikTok Scraping - Linguistic Harvester',
+  description: 'Herramienta de scraping y análisis de discurso en TikTok',
   icons: {
     icon: [
       {

@@ -16,4 +16,7 @@ from sqlalchemy import text
 async def init_db():
     async with async_engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
-        await conn.execute(text("ALTER TABLE videos ADD COLUMN IF NOT EXISTS error_message TEXT;"))
+        try:
+            await conn.execute(text("ALTER TABLE videos ADD COLUMN error_message TEXT;"))
+        except Exception:
+            pass
