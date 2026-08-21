@@ -30,22 +30,28 @@ def _background(task: asyncio.Task) -> None:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    logger.info("Base de datos: %s", settings.database_url)
+    logger.info("Base de datos: %s", settings.database_url or "(No configurada)")
     logger.info("=== INICIALIZANDO BASE DE DATOS ===")
     await init_db()
 
-    async with async_session() as session:
-        result = await session.execute(
-            update(Video)
-            .where(Video.status.in_(["descargando", "transcribiendo"]))
-            .values(status="pendiente")
-        )
-        if result.rowcount:
-            logger.info("Videos reseteados a pendiente: %d", result.rowcount)
-        await session.commit()
+    from app import database
+    if database.async_session:
+        try:
+            async with database.async_session() as session:
+                result = await session.execute(
+                    update(Video)
+                    .where(Video.status.in_(["descargando", "transcribiendo"]))
+                    .values(status="pendiente")
+                )
+                if result.rowcount:
+                    logger.info("Videos reseteados a pendiente: %d", result.rowcount)
+                await session.commit()
+        except Exception as e:
+            logger.warning("No se pudo conectar a la base de datos al inicio: %s", e)
 
-    logger.info("Arrancando ventana de transcripcion...")
-    _background(asyncio.create_task(avanzar_ventana_transcripcion()))
+    if settings.database_url:
+        logger.info("Arrancando ventana de transcripcion...")
+        _background(asyncio.create_task(avanzar_ventana_transcripcion()))
 
     logger.info("=== TIKTOK SCRAPING API INICIADA ===")
     yield

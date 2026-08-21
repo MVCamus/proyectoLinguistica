@@ -38,11 +38,112 @@ def _get_service():
             creds.refresh(Request())
         return build("drive", "v3", credentials=creds)
 
-    raise FileNotFoundError(
-        "No hay credenciales de Drive. "
-        "Crea credentials/gdrive_service_account.json (service account) "
-        "o ejecuta: python setup_drive.py (OAuth)"
+def existe_client_id() -> bool:
+    return (BASE_DIR / "credentials" / "gdrive_client_id.json").exists() or (BASE_DIR / "gdrive_client_id.json").exists()
+
+
+def obtener_info_usuario() -> dict:
+    has_client = existe_client_id()
+    try:
+        service = _get_service()
+        about = service.about().get(fields="user(emailAddress,displayName)").execute()
+        user = about.get("user", {})
+        return {
+            "connected": True,
+            "email": user.get("emailAddress"),
+            "display_name": user.get("displayName"),
+            "has_client_id": has_client,
+        }
+    except Exception as e:
+        logger.debug("Drive no conectado: %s", e)
+        return {
+            "connected": False,
+            "email": None,
+            "display_name": None,
+            "has_client_id": has_client,
+        }
+
+
+def desconectar_drive() -> bool:
+    eliminado = False
+    if OAUTH_TOKEN_FILE.exists():
+        try:
+            OAUTH_TOKEN_FILE.unlink()
+            eliminado = True
+        except Exception:
+            pass
+    if SERVICE_ACCOUNT_FILE.exists():
+        try:
+            SERVICE_ACCOUNT_FILE.unlink()
+            eliminado = True
+        except Exception:
+            pass
+    return eliminado
+
+
+def sanitizar_folder_id(url_o_id: str) -> str:
+    if not url_o_id:
+        return ""
+    url_o_id = url_o_id.strip()
+    match = re.search(r"folders/([a-zA-Z0-9_-]+)", url_o_id)
+    if match:
+        return match.group(1)
+    return url_o_id.split("?")[0].split("#")[0].strip()
+
+
+def guardar_client_secrets_json(content: str | dict):
+    CREDENTIALS_DIR = BASE_DIR / "credentials"
+    CREDENTIALS_DIR.mkdir(parents=True, exist_ok=True)
+    target_file = CREDENTIALS_DIR / "gdrive_client_id.json"
+    with open(target_file, "w", encoding="utf-8") as f:
+        if isinstance(content, dict):
+            import json
+            json.dump(content, f, indent=2)
+        else:
+            f.write(content)
+    return target_file
+
+
+def crear_client_secrets_desde_claves(client_id: str, client_secret: str):
+    client_id = client_id.strip()
+    client_secret = client_secret.strip()
+    data = {
+        "installed": {
+            "client_id": client_id,
+            "project_id": "google-drive-integration",
+            "auth_uri": "https://accounts.google.com/o/oauth2/auth",
+            "token_uri": "https://oauth2.googleapis.com/token",
+            "auth_provider_x509_cert_url": "https://www.googleapis.com/oauth2/v1/certs",
+            "client_secret": client_secret,
+            "redirect_uris": ["http://localhost"]
+        }
+    }
+    return guardar_client_secrets_json(data)
+
+
+def ejecutar_oauth_flow(client_file: Path | None = None):
+    import webbrowser
+    from google_auth_oauthlib.flow import InstalledAppFlow
+    if not client_file or not client_file.exists():
+        client_file = BASE_DIR / "credentials" / "gdrive_client_id.json"
+        if not client_file.exists():
+            client_file = BASE_DIR / "gdrive_client_id.json"
+    if not client_file.exists():
+        raise FileNotFoundError("No se encontró el archivo gdrive_client_id.json en credentials/")
+    
+    flow = InstalledAppFlow.from_client_secrets_file(str(client_file), SCOPES)
+    creds = flow.run_local_server(
+        port=0,
+        prompt="consent",
+        access_type="offline",
+        open_browser=True
     )
+    
+    (BASE_DIR / "credentials").mkdir(parents=True, exist_ok=True)
+    with open(OAUTH_TOKEN_FILE, "w", encoding="utf-8") as f:
+        f.write(creds.to_json())
+        
+    return obtener_info_usuario()
 
 
 def _group_folder_name(corpus_number: int) -> str:

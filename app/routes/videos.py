@@ -23,10 +23,25 @@ from app.schemas import (
     VideoListResponse,
     VideoOut,
 )
+from pydantic import BaseModel
 from app.worker import avanzar_ventana_transcripcion, subir_a_drive
 from app.services.discovery import parse_tiktok_urls
-from app.services.drive import eliminar_carpeta_video, listar_carpetas_video_en_drive, mover_carpeta_a_grupo, obtener_carpeta_grupo, renombrar_carpeta
+from app.services.drive import (
+    eliminar_carpeta_video,
+    listar_carpetas_video_en_drive,
+    mover_carpeta_a_grupo,
+    obtener_carpeta_grupo,
+    renombrar_carpeta,
+    obtener_info_usuario,
+    desconectar_drive,
+    sanitizar_folder_id,
+    guardar_client_secrets_json,
+    ejecutar_oauth_flow,
+)
 from app.config import settings as s
+
+class SetFolderRequest(BaseModel):
+    folder_url_or_id: str
 
 logger = logging.getLogger("tiktok_scraping.api")
 
@@ -48,6 +63,175 @@ async def obtener_estado_drive_sync():
     return _drive_sync_progress
 
 
+@router.get("/drive/status")
+async def get_drive_status():
+    loop = asyncio.get_event_loop()
+    info = await loop.run_in_executor(None, obtener_info_usuario)
+    clean_folder = sanitizar_folder_id(s.google_drive_folder_id)
+    return {
+        "connected": info.get("connected", False),
+        "email": info.get("email"),
+        "display_name": info.get("display_name"),
+        "has_client_id": info.get("has_client_id", False),
+        "folder_id": clean_folder,
+        "folder_configured": bool(clean_folder),
+    }
+
+
+@router.post("/drive/auth/start")
+async def start_drive_auth():
+    loop = asyncio.get_event_loop()
+    try:
+        info = await loop.run_in_executor(None, ejecutar_oauth_flow)
+        return {"status": "ok", "message": "Conectado exitosamente con Google Drive", "info": info}
+    except Exception as e:
+        logger.error("Error en autenticación OAuth de Drive: %s", e)
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@router.post("/drive/upload-client-secret")
+async def upload_client_secret(file: UploadFile = File(...)):
+    content = await file.read()
+    try:
+        import json
+        data = json.loads(content.decode("utf-8"))
+        guardar_client_secrets_json(data)
+        return {"status": "ok", "message": "Archivo de credenciales guardado correctamente"}
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Archivo JSON inválido: {e}")
+
+
+class SetClientKeysRequest(BaseModel):
+    client_id: str
+    client_secret: str
+
+
+@router.post("/drive/set-client-keys")
+async def set_client_keys(req: SetClientKeysRequest):
+    if not req.client_id.strip() or not req.client_secret.strip():
+        raise HTTPException(status_code=400, detail="El ID de cliente y el Secreto no pueden estar vacíos")
+    from app.services.drive import crear_client_secrets_desde_claves
+    try:
+        crear_client_secrets_desde_claves(req.client_id, req.client_secret)
+        return {"status": "ok", "message": "Claves de cliente configuradas correctamente"}
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Error al guardar claves: {e}")
+
+
+@router.post("/drive/set-folder")
+async def set_drive_folder(req: SetFolderRequest):
+    cleaned = sanitizar_folder_id(req.folder_url_or_id)
+    s.google_drive_folder_id = cleaned
+    
+    env_file = Path(__file__).resolve().parent.parent.parent / ".env"
+    if env_file.exists():
+        try:
+            with open(env_file, "r", encoding="utf-8") as f:
+                lines = f.readlines()
+            new_lines = []
+            found = False
+            for line in lines:
+                if line.strip().startswith("GOOGLE_DRIVE_FOLDER_ID="):
+                    new_lines.append(f"GOOGLE_DRIVE_FOLDER_ID={cleaned}\n")
+                    found = True
+                else:
+                    new_lines.append(line)
+            if not found:
+                new_lines.append(f"\nGOOGLE_DRIVE_FOLDER_ID={cleaned}\n")
+            with open(env_file, "w", encoding="utf-8") as f:
+                f.writelines(new_lines)
+        except Exception as e:
+            logger.warning("No se pudo actualizar .env: %s", e)
+            
+    return {
+        "status": "ok",
+        "folder_id": cleaned,
+        "message": "Carpeta de Google Drive configurada correctamente"
+    }
+
+
+@router.post("/drive/disconnect")
+async def disconnect_drive():
+    loop = asyncio.get_event_loop()
+    await loop.run_in_executor(None, desconectar_drive)
+    return {"status": "ok", "message": "Google Drive desconectado exitosamente"}
+
+
+class DatabaseConfigRequest(BaseModel):
+    database_url: str
+
+
+@router.get("/database/status")
+async def get_database_status():
+    from app.database import probar_conexion_database
+    if not s.database_url:
+        return {
+            "configured": False,
+            "connected": False,
+            "total_videos": 0,
+            "host": None,
+            "message": "Base de datos no configurada",
+        }
+    
+    host_display = None
+    if "@" in s.database_url:
+        host_display = s.database_url.split("@")[-1].split("/")[0]
+    
+    result = await probar_conexion_database(s.database_url)
+    return {
+        "configured": True,
+        "connected": result.get("ok", False),
+        "total_videos": result.get("total_videos", 0),
+        "host": host_display,
+        "error": result.get("error"),
+        "message": "Conectado a Supabase" if result.get("ok") else "Error de conexión",
+    }
+
+
+@router.post("/database/configure")
+async def configure_database(req: DatabaseConfigRequest):
+    from app.database import probar_conexion_database, reconfigurar_database
+    url = req.database_url.strip()
+    if not url:
+        raise HTTPException(status_code=400, detail="La URL de la base de datos no puede estar vacía")
+    
+    test_res = await probar_conexion_database(url)
+    if not test_res.get("ok"):
+        raise HTTPException(
+            status_code=400,
+            detail=f"Error al conectar con Supabase: {test_res.get('error', 'Verifica usuario y contraseña')}"
+        )
+    
+    clean_url = test_res.get("url", url)
+    await reconfigurar_database(clean_url)
+    
+    env_file = Path(__file__).resolve().parent.parent.parent / ".env"
+    if env_file.exists():
+        try:
+            with open(env_file, "r", encoding="utf-8") as f:
+                lines = f.readlines()
+            new_lines = []
+            found = False
+            for line in lines:
+                if line.strip().startswith("DATABASE_URL="):
+                    new_lines.append(f"DATABASE_URL={clean_url}\n")
+                    found = True
+                else:
+                    new_lines.append(line)
+            if not found:
+                new_lines.append(f"\nDATABASE_URL={clean_url}\n")
+            with open(env_file, "w", encoding="utf-8") as f:
+                f.writelines(new_lines)
+        except Exception as e:
+            logger.warning("No se pudo actualizar .env: %s", e)
+            
+    return {
+        "status": "ok",
+        "message": "Base de datos Supabase conectada y configurada exitosamente",
+        "total_videos": test_res.get("total_videos", 0),
+    }
+
+
 
 def _background(task: asyncio.Task) -> None:
     _background_tasks.add(task)
@@ -55,7 +239,13 @@ def _background(task: asyncio.Task) -> None:
 
 
 async def get_db() -> AsyncSession:
-    async with async_session() as session:
+    from app import database
+    if not database.async_session:
+        raise HTTPException(
+            status_code=503,
+            detail="Base de datos no configurada. Conecta tu proyecto de Supabase en la barra lateral."
+        )
+    async with database.async_session() as session:
         yield session
 
 
@@ -81,7 +271,7 @@ async def ingestar_pool(
     logger.info("URLs manuales recibidas: %s", body.urls_manuales)
     logger.info("Hashtags: %s", body.hashtags_incluir)
 
-    hashtags = body.hashtags_incluir or s.default_hashtags
+    hashtags = body.hashtags_incluir or []
 
     result = await db.execute(
         select(func.max(Video.shuffle_order))

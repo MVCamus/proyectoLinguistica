@@ -4,6 +4,14 @@ set -e
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 cd "$SCRIPT_DIR"
 
+if [ ! -f ".env" ]; then
+    if [ -f ".env.example" ]; then
+        cp .env.example .env
+    else
+        touch .env
+    fi
+fi
+
 if [ ! -d ".venv" ]; then
     echo "[1/4] Creando entorno virtual..."
     python3 -m venv .venv || python -m venv .venv

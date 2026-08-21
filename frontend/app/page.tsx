@@ -19,6 +19,7 @@ export default function Home() {
   const [corpusSyncStatus, setCorpusSyncStatus] = useState<{ active: boolean; current: number; total: number; message: string; created: number; ok: number; deleted: number } | null>(null)
   const [fixNumberingStatus, setFixNumberingStatus] = useState<{ active: boolean; current: number; total: number; message: string; renumbered: number; deleted_drive: number } | null>(null)
   const [syncDriveStatus, setSyncDriveStatus] = useState<{ active: boolean; current: number; total: number; message: string; renamed: number; deleted: number; moved: number } | null>(null)
+  const [dbNotConfigured, setDbNotConfigured] = useState<boolean>(false)
   const pollingRef = useRef<ReturnType<typeof setInterval>>()
   const failuresRef = useRef(0)
   const MAX_FAILURES = 10
@@ -34,8 +35,7 @@ export default function Home() {
           clearInterval(interval)
           interval = undefined
         }
-      } catch (err) {
-        console.error('Error al obtener estado de Drive:', err)
+      } catch {
       }
     }
 
@@ -56,9 +56,15 @@ export default function Home() {
     try {
       const { videos } = await fetchVideos('listo_para_triage', 24, 0)
       setDiscoveryVideos(videos)
+      setDbNotConfigured(false)
       failuresRef.current = 0
-    } catch (err) {
-      console.error('Error al obtener discovery videos:', err)
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err)
+      if (msg.includes('503')) {
+        setDbNotConfigured(true)
+      } else {
+        console.error('Error al obtener discovery videos:', err)
+      }
       failuresRef.current++
     } finally {
       setLoading(false)
@@ -70,15 +76,20 @@ export default function Home() {
       const { items } = await fetchProcessingQueue()
       setProcessingQueue(items)
       failuresRef.current = 0
-    } catch (err) {
-      console.error('Error al obtener cola de procesamiento:', err)
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err)
+      if (msg.includes('503')) {
+        setDbNotConfigured(true)
+      } else {
+        console.error('Error al obtener cola de procesamiento:', err)
+      }
       failuresRef.current++
     }
   }, [])
 
   const loadCorpus = useCallback(async () => {
     try {
-      const { videos, total, rawVideos } = await fetchCorpusVideos()
+      const { total, rawVideos } = await fetchCorpusVideos()
       const corpusVideos: CorpusVideo[] = rawVideos.map((v) => {
         const frontend = apiVideoToFrontend(v)
         return {
@@ -88,8 +99,14 @@ export default function Home() {
       })
       setCorpus(corpusVideos)
       setCorpusTotal(total)
-    } catch (err) {
-      console.error('Error al obtener corpus:', err)
+      setDbNotConfigured(false)
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err)
+      if (msg.includes('503')) {
+        setDbNotConfigured(true)
+      } else {
+        console.error('Error al obtener corpus:', err)
+      }
     }
   }, [])
 
@@ -99,9 +116,6 @@ export default function Home() {
     loadCorpus()
     pollingRef.current = setInterval(() => {
       if (failuresRef.current >= MAX_FAILURES) {
-        console.warn(`Polling detenido tras ${MAX_FAILURES} fallos consecutivos`)
-        clearInterval(pollingRef.current)
-        pollingRef.current = undefined
         return
       }
       loadDiscoveryVideos()
@@ -315,6 +329,15 @@ export default function Home() {
       />
 
       <main className="flex-1 flex flex-col overflow-hidden">
+        {dbNotConfigured && (
+          <div className="bg-primary/10 border-b border-primary/20 px-6 py-2.5 shrink-0 flex items-center justify-between gap-4">
+            <div className="flex items-center gap-2.5 text-xs text-foreground font-medium">
+              <span className="flex h-2 w-2 rounded-full bg-amber-500 animate-pulse" />
+              <span>Base de datos no configurada. Conecta tu proyecto de Supabase en la barra lateral para sincronizar el corpus.</span>
+            </div>
+          </div>
+        )}
+
         {driveSyncStatus?.active && (
           <div className="bg-amber-500/10 border-b border-amber-500/20 px-6 py-3 animate-in fade-in slide-in-from-top-2 duration-300 shrink-0">
             <div className="max-w-4xl flex items-center justify-between gap-6">

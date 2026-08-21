@@ -212,7 +212,7 @@ export function getVideoFileUrl(videoId: string) {
 export interface ProcessingItem {
   id: string
   url: string
-  status: string  // 'pendiente' | 'descargando' | 'transcribiendo' | 'error'
+  status: string
   errorMessage?: string
 }
 
@@ -231,4 +231,99 @@ export async function fetchProcessingQueue() {
     })),
     total: data.total,
   }
+}
+
+export interface DriveStatus {
+  connected: boolean
+  email: string | null
+  display_name: string | null
+  has_client_id: boolean
+  folder_id: string
+  folder_configured: boolean
+}
+
+export async function fetchDriveAuthStatus(): Promise<DriveStatus> {
+  const res = await fetch(`${API_BASE}/api/drive/status`)
+  if (!res.ok) throw new Error('Error al obtener estado de Drive')
+  return res.json()
+}
+
+export async function startDriveOAuth() {
+  const res = await fetch(`${API_BASE}/api/drive/auth/start`, { method: 'POST' })
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ detail: 'Error al iniciar sesión' }))
+    throw new Error(err.detail || 'Error al iniciar sesión con Google')
+  }
+  return res.json()
+}
+
+export async function uploadDriveClientSecret(file: File) {
+  const formData = new FormData()
+  formData.append('file', file)
+  const res = await fetch(`${API_BASE}/api/drive/upload-client-secret`, {
+    method: 'POST',
+    body: formData,
+  })
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ detail: 'Error al subir archivo' }))
+    throw new Error(err.detail || 'Error al subir archivo de credenciales')
+  }
+  return res.json()
+}
+
+export async function setDriveClientKeys(clientId: string, clientSecret: string) {
+  const res = await fetch(`${API_BASE}/api/drive/set-client-keys`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ client_id: clientId, client_secret: clientSecret }),
+  })
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ detail: 'Error al guardar claves' }))
+    throw new Error(err.detail || 'Error al guardar claves')
+  }
+  return res.json()
+}
+
+export async function setDriveFolder(folderUrlOrId: string) {
+  const res = await fetch(`${API_BASE}/api/drive/set-folder`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ folder_url_or_id: folderUrlOrId }),
+  })
+  if (!res.ok) throw new Error('Error al guardar la carpeta de Drive')
+  return res.json()
+}
+
+export async function disconnectDrive() {
+  const res = await fetch(`${API_BASE}/api/drive/disconnect`, { method: 'POST' })
+  if (!res.ok) throw new Error('Error al desconectar Drive')
+  return res.json()
+}
+
+export interface DatabaseStatus {
+  configured: boolean
+  connected: boolean
+  total_videos: number
+  host: string | null
+  error?: string | null
+  message: string
+}
+
+export async function fetchDatabaseStatus(): Promise<DatabaseStatus> {
+  const res = await fetch(`${API_BASE}/api/database/status`)
+  if (!res.ok) throw new Error('Error al obtener estado de la base de datos')
+  return res.json()
+}
+
+export async function configureDatabase(databaseUrl: string) {
+  const res = await fetch(`${API_BASE}/api/database/configure`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ database_url: databaseUrl }),
+  })
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ detail: 'Error al configurar base de datos' }))
+    throw new Error(err.detail || 'Error al configurar base de datos')
+  }
+  return res.json()
 }

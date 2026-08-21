@@ -3,6 +3,15 @@ cd /d "%~dp0"
 
 set VENV_PYTHON=%~dp0.venv\Scripts\python.exe
 
+:: Crear .env si no existe
+if not exist "%~dp0.env" (
+    if exist "%~dp0.env.example" (
+        copy "%~dp0.env.example" "%~dp0.env" >nul
+    ) else (
+        type nul > "%~dp0.env"
+    )
+)
+
 :: Crear .venv si no existe
 if not exist "%VENV_PYTHON%" (
     echo [1/4] Creando entorno virtual...
